@@ -274,6 +274,7 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "disp":         "displacement",
         "occ":          "occlusion"
         },
+
     "principled": { #----------------------------------- Mapping used for Principled shading mode
         "specRefIdx":   "", # boolean toggle refIndex/specAmount ?
         
@@ -395,6 +396,7 @@ stdMatChannelMap[lx.symbol.sITYPE_TEXTURELOC] = {
     "tileV":        "Wrapt"
 }
 
+# Command hook
 def export_basic_execute(Cmd_obj, msg):
     
     scene = modo.scene.current()
@@ -420,14 +422,16 @@ def export_basic_execute(Cmd_obj, msg):
     
     #----------- transform and write xml
     # to do ....
-   
+
+# Write the data as XML
 def writeXml(fileName, xml:ET.Element):
     ET.indent(xml, space="   ")
     xmlString = ET.tostring(xml, method="xml", xml_declaration=True).decode()
     fout = open(fileName + ".xml",'w') 
     fout.write(xmlString)
     fout.close()
-   
+
+# Write the data as USDA
 def writeUsda(filename:str, xml:ET.Element):
     
     print("saving usd ...")
@@ -438,16 +442,167 @@ def writeUsda(filename:str, xml:ET.Element):
     usdExportShaderTree(stage, context, xml)
     stage.GetRootLayer().Save()
     print("... usd saved")
-   
+
+# Write the data as JSON
 def writeJson(filename, dictionary):
     with open(filename + ".json", 'w') as fout:
         json.dump(dictionary, fout, indent=1)
         fout.flush()
 
+# Recursively convert the shader tree structure to xml
+def xmlExportItem(item:modo.Item):
+    out_xml = ET.Element(item.type)
+    out_xml.set('name',str(item.name).replace(" ", "_").replace("(", "").replace(")", ""))
+    out_xml.set('id', item.id)
+    out_xml.set('type', item.type)
+    
+    scene = modo.scene.current()
+    
+    #-------------------------------------------------------
+    # Store extra item dependencies based on shader tree item itemType
+    # some items are linked to shader tree items (like texture locators)
+    # but are not directly referenced inside the shader tree item list
+    # they are connected through the itemGraph like dependencies
+    #-------------------------------------------------------
+    match item.type:
+        case lx.symbol.sITYPE_IMAGEMAP:
+            graph = item.itemGraph(lx.symbol.sGRAPH_SHADELOC)
+    
+            fwdItem:modo.Item
+            for fwdItem in graph.forward(item.name):
+                match fwdItem.type:
+                    case lx.symbol.sITYPE_VIDEOSTILL: #----- Extract image file channels as xml element
+                        out_xml.append(xmlExportItem(fwdItem))
+                    
+                    case lx.symbol.sITYPE_TEXTURELOC: #----- Extract texture locator channels as xml element
+                        out_xml.append(xmlExportItem(fwdItem))
+
+    
+    #------------------------------- Export channels
+    if len(item.channels()) > 0:
+        channels = xmlGetChannels(item)
+        out_xml.append(channels)
+        
+    #------------------------------- Export childs
+    numChild = item.childCount()
+    for i in range(numChild):
+        itemChild = item.childAtIndex(i)
+        out_xml.append(xmlExportItem(itemChild))
+        
+    return out_xml
+
+# Grab all channels of an items and write it as separate xml elements in a channels structure
+def xmlGetChannels(item:modo.Item):
+    xml_out = ET.Element('channels')
+    
+    #------------------------------- Export channels
+    if len(item.channels()) > 0:
+        
+        channelsDict:OrderedDict = getChannels(item)
+        for chName in channelsDict:
+            xmlChan = ET.Element(chName)
+            
+            for attName in channelsDict[chName]:
+                att = channelsDict[chName][attName]
+                if type(att) is dict: # --------------------------- if channel has bee stored as dict (structure)
+                    dictName = list(att.keys())[0]
+                    xmlChan.set(attName, dictName)
+                    el = ET.Element(dictName)# -------------------- create an element containing the structure
+                    for valName in att[dictName].keys():
+                        el.set(valName, att[dictName][valName])
+                    xmlChan.append(el)
+                else: #-------------------------------------------- else create a simple attribute
+                    xmlChan.set(attName, channelsDict[chName][attName])
+            
+            xml_out.append(xmlChan)
+    
+    return xml_out
+
+# Recursively convert the shader tree structure to a Dict struccture (for json exoport)
+def exportItem(item:modo.Item):
+    out_dict = OrderedDict()
+    out_dict['name'] = item.name
+    out_dict['id'] = item.id
+    out_dict['type'] = item.type
+    
+    #------------------------------- Export channels
+    if len(item.channels()) > 0:
+        out_dict["channels"] = getChannels(item)
+        
+    #------------------------------- Export childs
+    for i in range(item.childCount()):
+        itemChild = item.childAtIndex(i)
+        out_dict[itemChild.name] = exportItem(itemChild)
+        
+    return out_dict
+
+# Grab all channels of an item and write it as separate Dict
+def getChannels(item:modo.Item):
+    d_channels = OrderedDict()
+
+    mChan:modo.Channel
+    for mChan in item.channels():
+        chanName = str(mChan.name).split(".")[0] # Important ! if not using the first part of the name, channelTriple are treated as 3 channels
+        d = formatChannel(item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
+        if preFilterChannels:
+            if (item.type in filters.keys()) and (len(filters[item.type])>0):
+                d_channels[chanName] = d
+        else:
+            d_channels[chanName] = d
+            
+    
+    alphaSort = OrderedDict(sorted(d_channels.items()))
+    return alphaSort
+
+# Format a channel to the right type (lot of weird stuff here, personnal cooking !)
+def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
+
+    if (ctype == None) : ctype = "NONE"
+    if (evalType == None) : evalType = "NONE"
+    if (storageType == None) : storageType = "NONE"
+
+    
+    chan = {} #----------------------------------------------- container to receive the channels properties
+    
+    if storageType == "color1":storageType='color3'
+    if evalType == "color1":evalType='color3'
+        
+    if type(channel) is modo.ChannelTriple:
+        # values = channel.get()
+        # for i in range(len(values)):
+        #     value = channel.get()[i]
+        #     print(type(value))
+        
+        
+        try: chan['value'] = str(channel.get())
+        except AttributeError: chan['value'] = "This channel has no value!"
+        except: chan['value'] = "There was an error!"
+
+    else:
+        try: chan['value'] = formatChannelValue(channel)
+        except AttributeError: chan['value'] = "This channel has no value!"
+        except: chan['value'] = "There was an error!"
+    
+    try: chan['type'] = channelTypeMap[ctype]
+    except AttributeError: chan['type'] = "This channel has no type!"
+    except: chan['type'] = "There was an error!"
+    
+    try: chan['evaltype'] = evalType
+    except AttributeError: chan['type'] = "This channel has no evaltype!"
+    except: chan['type'] = "There was an error!"
+    
+    try: chan['storageType'] = storageType
+    except AttributeError: chan['storageType'] = "This channel has no storageType!"
+    except: chan['storageType'] = "There was an error!"
+    
+    return chan
+
+# Clean the shadertree layers names (remove white space and parenthesis)
 def cleanName(name:str) -> str:
     #print(name)
     return name.replace(" ", "_").replace("(", "").replace(")", "")
 
+# Recursive shader tree parsing
 def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element) -> ShadingContext:
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
@@ -627,7 +782,8 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
         
     return context
 
-def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader:
+# Create USD shader for advanced material layer
+def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
     
     path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
     
@@ -668,7 +824,8 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
     
     return shader
 
-def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> str|None:
+# Apply overrides when things are specific to how the shaderTree works (multiple options due to legacy and updates)
+def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> str|None: 
     
     #---------------------------------------------------- Get useRefIdx value for remapping
     useRefIdx = (xml.find('channels/useRefIdx').get('value')=="1")
@@ -709,8 +866,9 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
         print ("to " + str(usdValue))
         
     return usdValue
-    
-def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Shader:
+
+# Create USD Shader input according to modo channel scopped
+def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Shader: 
             
     if type(usdValue) is UsdShade.Output:
         print("CONNECT %s = %s as %s" % (str(usdInputName), str(usdValue), str(sdfType)))
@@ -742,7 +900,8 @@ def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfT
     
     return None
 
-def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml:ET.Element):
+# Create and connect USD texture Shader when image found in the shader tree
+def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml:ET.Element): 
 
     #---------------------------------------------------- Create the texture locator
     stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
@@ -770,6 +929,7 @@ def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml
     
     return texture
 
+# Connect a texture to the relevant shader
 def connectTextureToShaderInput(textureFinal:UsdShade.Shader, shader:UsdShade.Shader, modoInputName:str, stringMap:dict) -> UsdShade.Input:
     
     if modoInputName in stringMap.keys():
@@ -784,151 +944,9 @@ def connectTextureToShaderInput(textureFinal:UsdShade.Shader, shader:UsdShade.Sh
     
     print("Effect %s not found in stringMap" % modoInputName)
     return None
-    
-def xmlExportItem(item:modo.Item):
-    out_xml = ET.Element(item.type)
-    out_xml.set('name',str(item.name).replace(" ", "_").replace("(", "").replace(")", ""))
-    out_xml.set('id', item.id)
-    out_xml.set('type', item.type)
-    
-    scene = modo.scene.current()
-    
-    #-------------------------------------------------------
-    # Store extra item dependencies based on shader tree item itemType
-    # some items are linked to shader tree items (like texture locators)
-    # but are not directly referenced inside the shader tree item list
-    # they are connected through the itemGraph like dependencies
-    #-------------------------------------------------------
-    match item.type:
-        case lx.symbol.sITYPE_IMAGEMAP:
-            graph = item.itemGraph(lx.symbol.sGRAPH_SHADELOC)
-    
-            fwdItem:modo.Item
-            for fwdItem in graph.forward(item.name):
-                match fwdItem.type:
-                    case lx.symbol.sITYPE_VIDEOSTILL: #----- Extract image file channels as xml element
-                        out_xml.append(xmlExportItem(fwdItem))
-                    
-                    case lx.symbol.sITYPE_TEXTURELOC: #----- Extract texture locator channels as xml element
-                        out_xml.append(xmlExportItem(fwdItem))
 
-    
-    #------------------------------- Export channels
-    if len(item.channels()) > 0:
-        channels = xmlGetChannels(item)
-        out_xml.append(channels)
-        
-    #------------------------------- Export childs
-    numChild = item.childCount()
-    for i in range(numChild):
-        itemChild = item.childAtIndex(i)
-        out_xml.append(xmlExportItem(itemChild))
-        
-    return out_xml
-
-def xmlGetChannels(item:modo.Item):
-    xml_out = ET.Element('channels')
-    
-    #------------------------------- Export channels
-    if len(item.channels()) > 0:
-        
-        channelsDict:OrderedDict = getChannels(item)
-        for chName in channelsDict:
-            xmlChan = ET.Element(chName)
-            
-            for attName in channelsDict[chName]:
-                att = channelsDict[chName][attName]
-                if type(att) is dict: # --------------------------- if channel has bee stored as dict (structure)
-                    dictName = list(att.keys())[0]
-                    xmlChan.set(attName, dictName)
-                    el = ET.Element(dictName)# -------------------- create an element containing the structure
-                    for valName in att[dictName].keys():
-                        el.set(valName, att[dictName][valName])
-                    xmlChan.append(el)
-                else: #-------------------------------------------- else create a simple attribute
-                    xmlChan.set(attName, channelsDict[chName][attName])
-            
-            xml_out.append(xmlChan)
-    
-    return xml_out
-
-def exportItem(item:modo.Item):
-    out_dict = OrderedDict()
-    out_dict['name'] = item.name
-    out_dict['id'] = item.id
-    out_dict['type'] = item.type
-    
-    #------------------------------- Export channels
-    if len(item.channels()) > 0:
-        out_dict["channels"] = getChannels(item)
-        
-    #------------------------------- Export childs
-    for i in range(item.childCount()):
-        itemChild = item.childAtIndex(i)
-        out_dict[itemChild.name] = exportItem(itemChild)
-        
-    return out_dict
-
-def getChannels(item:modo.Item):
-    d_channels = OrderedDict()
-
-    mChan:modo.Channel
-    for mChan in item.channels():
-        chanName = str(mChan.name).split(".")[0] # Important ! if not using the first part of the name, channelTriple are treated as 3 channels
-        d = formatChannel(item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
-        if preFilterChannels:
-            if (item.type in filters.keys()) and (len(filters[item.type])>0):
-                d_channels[chanName] = d
-        else:
-            d_channels[chanName] = d
-            
-    
-    alphaSort = OrderedDict(sorted(d_channels.items()))
-    return alphaSort
-
-def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
-
-    if (ctype == None) : ctype = "NONE"
-    if (evalType == None) : evalType = "NONE"
-    if (storageType == None) : storageType = "NONE"
-
-    
-    chan = {} #----------------------------------------------- container to receive the channels properties
-    
-    if storageType == "color1":storageType='color3'
-    if evalType == "color1":evalType='color3'
-        
-    if type(channel) is modo.ChannelTriple:
-        # values = channel.get()
-        # for i in range(len(values)):
-        #     value = channel.get()[i]
-        #     print(type(value))
-        
-        
-        try: chan['value'] = str(channel.get())
-        except AttributeError: chan['value'] = "This channel has no value!"
-        except: chan['value'] = "There was an error!"
-
-    else:
-        try: chan['value'] = formatChannelValue(channel)
-        except AttributeError: chan['value'] = "This channel has no value!"
-        except: chan['value'] = "There was an error!"
-    
-    try: chan['type'] = channelTypeMap[ctype]
-    except AttributeError: chan['type'] = "This channel has no type!"
-    except: chan['type'] = "There was an error!"
-    
-    try: chan['evaltype'] = evalType
-    except AttributeError: chan['type'] = "This channel has no evaltype!"
-    except: chan['type'] = "There was an error!"
-    
-    try: chan['storageType'] = storageType
-    except AttributeError: chan['storageType'] = "This channel has no storageType!"
-    except: chan['storageType'] = "There was an error!"
-    
-    return chan
-
-def formatChannelValue(channel:modo.Channel): # Format any channel value to given type
+# Format any channel value to given type
+def formatChannelValue(channel:modo.Channel): 
     #return(value)
     match channel.type:
         case lx.symbol.iCHANTYPE_INTEGER:
@@ -975,6 +993,7 @@ def formatChannelValue(channel:modo.Channel): # Format any channel value to give
         case lx.symbol.iCHANTYPE_NONE:
             return "None"
 
+# For a given modo channel name, retrieve the usd equivalent input name using a map Dict type table (stdMatChannelMap)
 def getMappedChannel(chName:str, itemType:str=None, brdfType:str = None)->str:
     # print("Looking for mapping value for channel: %s for brdfType: %s" % (chName, brdfType))
     #---------------------------------------------- if cno itemType specified, return everything
@@ -1005,6 +1024,9 @@ def getMappedChannel(chName:str, itemType:str=None, brdfType:str = None)->str:
     print("Failed finding mapping for channel %s" % chName)
     return None
 
+# Use a filter list to allow or  disallow a channel to be processed (is the filter option is on,
+# some channels are just ignored to make files lighter. Some channels are really not relevant for
+# export but unfiltered outputs are usefull for debugging and figuring what the shaderTree has to offer)
 def isFiltered(chName:str, itemType:str=None):
     #---------------------------------------------- if no itemType specified, return everything
     if itemType == None:
