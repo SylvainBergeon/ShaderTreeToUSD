@@ -554,7 +554,7 @@ def getChannels(item:modo.Item):
     alphaSort = OrderedDict(sorted(d_channels.items()))
     return alphaSort
 
-# Format a channel to the right type (lot of weird stuff here, personnal cooking !)
+# Format a channel to the right type (lots of weird stuff here, personnal cooking !)
 def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
 
     if (ctype == None) : ctype = "NONE"
