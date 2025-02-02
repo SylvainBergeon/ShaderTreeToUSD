@@ -173,7 +173,7 @@ channelTypeMap = {
     lx.symbol.iCHANTYPE_NONE:       "none"
 }
 
-usdStringMap = {
+usdInputMap = {
     "uvTile":{
         "reset":"black",
         "repeat":"periodic",
@@ -184,6 +184,7 @@ usdStringMap = {
         "diffColor":"base_color",
         "rough":"specular_roughness",
         "normal":"in",
+        "tranAmount":"transmission",
         "lumiAmount":"emission",
         "lumiColor":"emission_color",
         "specColor":"specular_color",
@@ -607,6 +608,8 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
     
+    #TODO : find a way to manege the override system using stacking priority, blending amount and blending type (mult, add, substract etc...)
+    
     match elementName:
         #------------------------------------------------------- If shadertree root, explore all childs set shadertree path
         case 'polyRender':
@@ -620,8 +623,8 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
             
             for child in xml.findall('*'):
                 context = usdExportShaderTree(stage, context, child)
-                
-        #------------------------------------------------------- If mask, explore all child set material group path
+
+        #------------------------------------------------------- If mask, explore all child layers
         case 'mask':
             path = "/shadertree/" +  cleanName(xml.get('name'))
             
@@ -636,14 +639,15 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                 else:
                     pass
                     
-        
+        #------------------------------------------------------- If imageMap, set USD graph with adjustments based on still image properties and effects
         case "imageMap":
             material:UsdShade.Material = context.material
             shader:UsdShade.Shader = context.shader
             advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
             previewShader:UsdShade.Shader = context.previewShader
             
-            path:Path = material.GetPath().AppendPath(cleanName(xml.find('videoStill').get('name')))
+            #path:Path = material.GetPath().AppendPath(cleanName(xml.find('videoStill').get('name')))
+            path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
             
             print("create IMAGEMAP at %s" % (path))
             
@@ -695,6 +699,10 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                         #---------------------------------------------------- Connect round map to shader input
                         shader.CreateInput("opacity", Sdf.ValueTypeNames.Vector3f).ConnectToSource(roundShader.GetOutput('out'))
                         
+                    case "tranAmount":
+                        #---------------------------------------------------- Connect imageMap alpha to transission
+                        shader.CreateInput("transmission", Sdf.ValueTypeNames.Float).ConnectToSource(texture.GetOutput('a'))
+                        
                     case "bump":
                         #---------------------------------------------------- Retrieve displace value in parent/channels node
                         bumpHeight = float(advancedMaterialChannels.find("bumpAmp").get("value"))
@@ -734,11 +742,6 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                             previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
                     
                     case "displace":
-                        
-                        #connectorOut = 'displacement'
-                        #materialConnector = "mtlx:"
-                        #surfaceTerminal = material.CreateOutput(materialConnector+connectorOut, Sdf.ValueTypeNames.Token)
-                        
                         #---------------------------------------------------- Retrieve displace value in parent/channels node
                         displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
                         
@@ -756,7 +759,7 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                         
                     case _:
                         #---------------------------------------------------- Connect texture to shader input
-                        connectTextureToShaderInput(textureFinal, shader, modoInputName, usdStringMap['effect'])
+                        connectTextureToShaderInput(textureFinal, shader, modoInputName)
                         
                         #---------------------------------------------------- Connect texture to previewShader input
                         if (exportGlPreviewMaterial):
@@ -765,7 +768,6 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
         #------------------------------------------------------- If material, create shader at defined path
         case 'advancedMaterial':
             # -------------------------------------------------- if has no context, then do nothing, as it's probably a shader that's outside a mask
-            print (context)
             if context.material is None: return context
             
             material:UsdShade.Material = context.material
@@ -840,9 +842,10 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     if modoInputName == 'specAmt': usdValue = "1.0"
                     #if modoInputName == 'refIndex': usdValue = xml.find('channels/refIndex').get('value')
                 else:
-                    if modoInputName == 'specAmt': usdValue = "1.0"
+                    #if modoInputName == 'specAmt': usdValue = "1.0"
                     #if modoInputName == 'refIndex': usdValue = 1.0 + float(xml.find('channels/specAmt').get('value'))
-                    if modoInputName == "specCol" : usdValue = "(1.0, 1.0, 1.0)"
+                    #if modoInputName == "specCol" : usdValue = "(1.0, 1.0, 1.0)"
+                    pass
                         
             case "principled":
                 if useRefIdx:
@@ -861,9 +864,7 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     #if modoInputName == 'refIndex': usdValue = 1.0 + float(xml.find('channels/refIndex').get('value'))
    
     if  usdValue != originalValue:
-        print("Overrided value : " + str(modoInputName) )
-        print ("from " + str(originalValue))
-        print ("to " + str(usdValue))
+        print("Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
         
     return usdValue
 
@@ -886,7 +887,6 @@ def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfT
                 sdfValue = eval(usdValue)
                     
             case Sdf.ValueTypeNames.Vector3f:
-                print(usdValue)
                 sdfValue = eval(usdValue)
                     
             case Sdf.ValueTypeNames.String: 
@@ -913,8 +913,8 @@ def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml
     texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(path) + "_imageFile")
     texture.CreateIdAttr('ND_UsdUVTexture_23')
     texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
-    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdStringMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
-    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdStringMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
+    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
+    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
     
     #---------------------------------------------------- Connect the texture locator to the texture
     texture.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(stReader.ConnectableAPI(), 'out')
@@ -925,22 +925,25 @@ def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml
     # texture.CreateInput('scale', Sdf.ValueTypeNames.Color4f).Set()
     # texture.CreateInput('bias', Sdf.ValueTypeNames.Color4f).Set()
     
+    texture.CreateOutput('r', Sdf.ValueTypeNames.Float)
+    texture.CreateOutput('g', Sdf.ValueTypeNames.Float)
+    texture.CreateOutput('b', Sdf.ValueTypeNames.Float)
+    texture.CreateOutput('a', Sdf.ValueTypeNames.Float)
     texture.CreateOutput('rgb', Sdf.ValueTypeNames.Color3f)
     
     return texture
 
 # Connect a texture to the relevant shader
-def connectTextureToShaderInput(textureFinal:UsdShade.Shader, shader:UsdShade.Shader, modoInputName:str, stringMap:dict) -> UsdShade.Input:
-    
-    if modoInputName in stringMap.keys():
-        inputName = stringMap[modoInputName]
-        
+def connectTextureToShaderInput(textureFinal:UsdShade.Shader, shader:UsdShade.Shader, modoInputName:str) -> UsdShade.Input:
+    if modoInputName in usdInputMap['effect'].keys():
+        inputName = usdInputMap['effect'][modoInputName]
         input = shader.GetInput(inputName)
-                    
+        output = textureFinal.GetOutput("out")
+        
         if input.Get() != None:
-            return input.ConnectToSource(textureFinal.GetOutput('out'))
+            return input.ConnectToSource(output)
         else:
-            return createUsdShaderInput(shader, inputName, textureFinal.GetOutput('out'), usdTypeMap[inputName])
+            return createUsdShaderInput(shader, inputName, output, usdTypeMap[inputName])
     
     print("Effect %s not found in stringMap" % modoInputName)
     return None
