@@ -1,0 +1,27 @@
+{   
+    "python.defaultInterpreterPath": "/Library/Frameworks/Python.framework/Versions/3.10/python",
+    "python.autoComplete.extraPaths": [
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/Usd",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdGeom",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdHydra",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdLux",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdMedia"
+    ],
+    "python.analysis.extraPaths": [
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/Usd",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdGeom",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdHydra",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdLux",
+        "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr/UsdMedia"
+    ],
+    "python.analysis.stubPath": "/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/Houdini/pxr-stubs",
+    "python.analysis.typeCheckingMode": "off",
+    "python.analysis.packageIndexDepths": [
+        {
+            "name": "pxr",
+            "depth": 3
+        }
+    ]
+}
