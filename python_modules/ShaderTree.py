@@ -909,7 +909,14 @@ def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml
     stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
     stReader.CreateIdAttr('ND_texcoord_vector2')
     stReader.CreateInput('index', Sdf.ValueTypeNames.Int).Set(0)
-    stReader.CreateOutput('result', Sdf.ValueTypeNames.TexCoord2f)
+    stReader.CreateOutput('out', Sdf.ValueTypeNames.TexCoord2f)
+    
+    #---------------------------------------------------- Create the texture transform
+    uvTransform = UsdShade.Shader.Define(stage, str(path) + "_texture_transform")
+    uvTransform.CreateIdAttr('UsdTransform2d')
+    uvTransform.CreateInput('in', Sdf.ValueTypeNames.TexCoord2f).ConnectToSource(stReader.ConnectableAPI(), 'out')
+    uvTransform.CreateInput('scale', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/wrapU').get('value')),float(xml.find('txtrLocator/channels/wrapV').get('value'))))
+    uvTransform.CreateOutput('result', Sdf.ValueTypeNames.TexCoord2f)
     
     #---------------------------------------------------- Create the texture
     texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(path) + "_imageFile")
@@ -919,7 +926,7 @@ def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml
     texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
     
     #---------------------------------------------------- Connect the texture locator to the texture
-    texture.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(stReader.ConnectableAPI(), 'out')
+    texture.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(uvTransform.ConnectableAPI(), 'result')
     
     #texture.CreateInput('St', Sdf.ValueTypeNames.Float2).Set((0,0))
     #texture.CreateOutput('alpha', Sdf.ValueTypeNames.Double)
