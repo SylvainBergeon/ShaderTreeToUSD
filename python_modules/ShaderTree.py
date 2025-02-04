@@ -10,6 +10,7 @@ import lxu.service
 import lxifc
 import modo
 import json
+import math
 from collections import OrderedDict
 from typing import NamedTuple
 
@@ -353,7 +354,7 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "stencil":      "opacity",
         
         # # =============================================== SHEEN
-        "specFres":     "sheen", # not sure about that but it looks like same effect
+        #"specFres":     "sheen", # not sure about that but it looks like same effect
         
         # # =============================================== EMISSION
         "radiance":     "emission",
@@ -840,11 +841,12 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
             case "gtr":
                 if useRefIdx:
                     if modoInputName == 'specAmt': usdValue = "1.0"
-                    #if modoInputName == 'refIndex': usdValue = xml.find('channels/refIndex').get('value')
                 else:
-                    #if modoInputName == 'specAmt': usdValue = "1.0"
-                    #if modoInputName == 'refIndex': usdValue = 1.0 + float(xml.find('channels/specAmt').get('value'))
-                    #if modoInputName == "specCol" : usdValue = "(1.0, 1.0, 1.0)"
+                    if modoInputName == 'specAmt': usdValue = "1.0"
+                    
+                    if modoInputName == 'refIndex':
+                        specAmnt = float(xml.find('channels/specAmt').get('value'))
+                        usdValue =  2 / (1 - math.sqrt(specAmnt)) - 1
                     pass
                         
             case "principled":
