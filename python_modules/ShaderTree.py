@@ -164,7 +164,6 @@ filters[lx.symbol.sITYPE_TEXTURELOC] = [
     "triplanarBlending", 
     
 ]
-
 channelTypeMap = {
     lx.symbol.iCHANTYPE_EVAL:       "eval",
     lx.symbol.iCHANTYPE_FLOAT:      "float",
@@ -173,7 +172,6 @@ channelTypeMap = {
     lx.symbol.iCHANTYPE_STORAGE:    "string",
     lx.symbol.iCHANTYPE_NONE:       "none"
 }
-
 usdInputMap = {
     "uvTile":{
         "reset":"black",
@@ -204,7 +202,6 @@ usdInputMap = {
         "displace":"displacement"
     }
 }
-
 usdTypeMap = {
     # ----------------------------------------- mtlx standard
     "base":Sdf.ValueTypeNames.Float,
@@ -253,7 +250,6 @@ usdTypeMap = {
     "ior":Sdf.ValueTypeNames.Float,
     "occlusion":Sdf.ValueTypeNames.Float,
 }
-
 stdMatChannelMap = {}
 stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
     "glPreview": { #----------------------------------- Mapping used for Principled shading mode
@@ -372,7 +368,6 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "disp":         "displacement",
         }
     }
-
 stdMatChannelMap[lx.symbol.sITYPE_MASK] = {
     "blend":        "",
     "effect":       "",
