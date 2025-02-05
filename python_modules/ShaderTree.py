@@ -916,6 +916,8 @@ def createUsdTexture(stage:Usd.Stage, material:UsdShade.Material, path:Path, xml
     uvTransform.CreateIdAttr('UsdTransform2d')
     uvTransform.CreateInput('in', Sdf.ValueTypeNames.TexCoord2f).ConnectToSource(stReader.ConnectableAPI(), 'out')
     uvTransform.CreateInput('scale', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/wrapU').get('value')),float(xml.find('txtrLocator/channels/wrapV').get('value'))))
+    uvTransform.CreateInput('translation', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/m02').get('value')),float(xml.find('txtrLocator/channels/m12').get('value'))))
+    uvTransform.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(360 * float(xml.find('txtrLocator/channels/uvRotation').get('value')) / (2 * math.pi))
     uvTransform.CreateOutput('result', Sdf.ValueTypeNames.TexCoord2f)
     
     #---------------------------------------------------- Create the texture
