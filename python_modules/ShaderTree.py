@@ -843,7 +843,6 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     disperseValue = float(originalValue)
                     if disperseValue != 0: usdValue = abs(.1/float(disperseValue))
                 
-                
                 if modoInputName == 'tranRough': usdValue = float(originalValue) * 2
                     
                 if useRefIdx:
