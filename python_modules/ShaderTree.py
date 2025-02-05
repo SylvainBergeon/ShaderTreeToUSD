@@ -839,6 +839,10 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
     match brdfType:
                         
             case "gtr":
+                if modoInputName == 'disperse':
+                    disperseValue = float(originalValue)
+                    if disperseValue >0: usdValue = .1/float(disperseValue)
+                    
                 if useRefIdx:
                     if modoInputName == 'specAmt': usdValue = "1.0"
                 else:
