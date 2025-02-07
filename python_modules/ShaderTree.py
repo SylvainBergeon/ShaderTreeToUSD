@@ -349,9 +349,6 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "tranRough":    "transmission_extra_roughness",
         "stencil":      "opacity",
         
-        # # =============================================== SHEEN
-        #"specFres":     "sheen", # not sure about that but it looks like same effect
-        
         # # =============================================== EMISSION
         "radiance":     "emission",
         "luminousCol":  "emission_color",
@@ -361,7 +358,6 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "subsCol":      "subsurface_color",
         "subsDepth":    "subsurface_radius",
         "subsDist":     "subsurface_scale",
-        "specFres":     "sheen",
         
         # # =============================================== surface
         "normal":       "normal",
