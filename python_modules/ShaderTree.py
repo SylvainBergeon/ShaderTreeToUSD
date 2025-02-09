@@ -79,6 +79,7 @@ filters [lx.symbol.sITYPE_ADVANCEDMATERIAL] = [
     "subsDist",
     "sheen",
     "sheenTint",
+    "flatness",
     "opacity",
     "disperse",
     "metallic",
@@ -188,6 +189,9 @@ usdInputMap = {
         "lumiColor":"emission_color",
         "specColor":"specular_color",
         "metallic":"metalness",
+        "sheen":"sheen",
+        "sheenTint":"sheen_color",
+        "flatness":"sheen_roughness",
         "displace":"displacement"
     },
     "effect_gl":{
@@ -214,7 +218,8 @@ usdTypeMap = {
     "specular_anisotropy":Sdf.ValueTypeNames.Float,
     "specular_roughness":Sdf.ValueTypeNames.Float,
     "sheen":Sdf.ValueTypeNames.Float,
-    "sheen_color":Sdf.ValueTypeNames.Color3f,
+    "sheen_color":Sdf.ValueTypeNames.Color3f, #----------- beware of this, original modo value (sheenTint) is Float, sheen_color override changes its type
+    "sheen_roughness":Sdf.ValueTypeNames.Float,
     "coat":Sdf.ValueTypeNames.Float,
     "coat_roughness":Sdf.ValueTypeNames.Float,
     "emission":Sdf.ValueTypeNames.Float,
@@ -287,8 +292,6 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "refIndex":     "specular_IOR", # (if useRefIdx = 1 & specRefIdx = 1):refIndex or (if useRefIdx = 1 & specRefIdx = 0):1+specAmt
         "aniso":        "specular_anisotropy",
         "rough":        "specular_roughness",
-        "specFres":     "sheen",
-        #"sheenTint":    "sheen_color", # sheenTint is a float in modo, but sheen_color is a color in usd ?
         
         # =============================================== COAT
         "coatAmt":      "coat",
@@ -297,6 +300,11 @@ stdMatChannelMap [lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         # =============================================== EMISSION
         "luminousAmt":  "emission",
         "luminousCol":  "emission_color",
+        
+        # =============================================== SHEEN
+        "sheen":"sheen",
+        "sheenTint":"sheen_color",
+        "flatness":"sheen_roughness",
         
         # =============================================== TRANSMISSION
         "tranAmt":      "transmission",
@@ -747,12 +755,12 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                         
                     #     shader.GetInput(usdInputMap['effect'][modoInputName]).ConnectToSource(extractAlphaShader.GetOutput('outa'))
                                         
-                    case "rough"|"metallic"|"coatAmount"|"coatRough"|"coatRough"|"diffAmount"|"tranAmount"|"tranRough"|"specAmount"|"subsAmount"|"tranRough"|"lumiAmount"|"dissolve"|"diffRough":
+                    case "rough"|"metallic"|"sheen"|"flatness"|"coatAmount"|"coatRough"|"coatRough"|"diffAmount"|"tranAmount"|"tranRough"|"specAmount"|"subsAmount"|"tranRough"|"lumiAmount"|"dissolve"|"diffRough":
                         #---------------------------------------------------- Create texture definition even if modo layer is disabled
                         textureOutput:UsdShade.Output = createUsdTextureOutput(stage, material, path, xml, Sdf.ValueTypeNames.Float)
                         connectTextureOutputToShaderInput(textureOutput, shader, modoInputName)
                     
-                    case "diffColor"|"specColor"|"tranColor"|"subsColor"|"reflColor"|"lumiColor":
+                    case "diffColor"|"specColor"|"tranColor"|"subsColor"|"reflColor"|"lumiColor"|"sheenTint":
                         #---------------------------------------------------- Create texture definition even if modo layer is disabled
                         textureOutput:UsdShade.Output = createUsdTextureOutput(stage, material, path, xml, Sdf.ValueTypeNames.Color3f)
                         connectTextureOutputToShaderInput(textureOutput, shader, modoInputName)
@@ -849,24 +857,67 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     
                     if modoInputName == 'refIndex':
                         specAmnt = float(xml.find('channels/specAmt').get('value'))
-                        print(specAmnt)
                         usdValue =  2 / (1 - math.sqrt(specAmnt * .99999)) - 1
                         
             case "principled":
                 if useRefIdx:
+                    specAmnt = float(xml.find('channels/specAmt').get('value'))
+                    refIdx = float(xml.find('channels/refIndex').get('value'))
                     if specRefIdx:
-                        if modoInputName == 'specAmt': usdValue = str(1.0)# - float(xml.find('channels/specAmt').get('value')))
-                        if modoInputName == 'refIndex': usdValue = str(1.0 + float(xml.find('channels/specAmt').get('value')))
-                        if modoInputName == 'specCol': usdValue = "(1.0, 1.0, 1.0)"
+                        # if modoInputName == 'specAmt': usdValue = 1.0
+                        # if modoInputName == 'refIndex': usdValue = 2 / (1 - math.sqrt(specAmnt * .8)) - 1
+                        #if modoInputName == 'specCol': usdValue = "(1.0, 1.0, 1.0)"
+                        
+                        # The formula above is an approximation based on observation, nothing really serious here but that's the best I have
+                        x = 2 / (1 - math.sqrt(specAmnt * .8)) - 1 # avoid division by zero
+                        k = 100 # magic number, determine how fast the value reaches 1 when refIdx > 1
+                        if modoInputName == 'specAmt': usdValue = 1-(1/(k*(x-1)+1))# 1-(1/((k*x)-(k-1)))
+                        if modoInputName == 'refIndex': usdValue = x
+                        
                     else:
-                        if modoInputName == 'specAmt': usdValue = "1.0"
-                        if modoInputName == 'refIndex': usdValue = xml.find('channels/refIndex').get('value')
+                        # The formula above is an approximation based on observation, nothing really serious here but that's the best I have
+                        x = refIdx
+                        k = 20 # magic number, determine how fast the value reaches 1 when refIdx > 1
+                        if modoInputName == 'specAmt': usdValue = 1-(1/(k*(x-1)+1)) #1-(1/((k*x)-(k-1)))
+                        if modoInputName == 'refIndex': usdValue = refIdx
+                    
+                    
+                            
                 else:
-                    if modoInputName == 'specAmt': usdValue = xml.find('channels/specAmt').get('value')
+                    specAmnt = float(xml.find('channels/specAmt').get('value'))
+                    refIdx = float(xml.find('channels/specAmt').get('value'))
+                    if modoInputName == 'specAmt': usdValue = 1.0
+                    if modoInputName == 'refIndex': usdValue = 1 / (specAmnt * specAmnt) #1 + math.sqrt(specAmnt * .99999)
+                    
                     if modoInputName == 'specTint': usdValue = xml.find('channels/specTint').get('value')
-                    if modoInputName == 'refIndex': usdValue = float(xml.find('channels/specAmt').get('value'))
                     if modoInputName == 'specCol': usdValue = "(1.0, 1.0, 1.0)"
-                    #if modoInputName == 'refIndex': usdValue = 1.0 + float(xml.find('channels/refIndex').get('value'))
+                
+                if modoInputName == 'specCol':
+                    diffCol = eval(xml.find('channels/diffCol').get('value'))
+                    specTint = float(xml.find('channels/specTint').get('value'))
+                    #----------------------- get diff color
+                    dr = diffCol[0]
+                    dg = diffCol[1]
+                    db = diffCol[2]
+                    
+                    #----------------------- Normalize and add
+                    m = max(dr, dg, db)
+                    sr = 1 + ((dr / m) * specTint)
+                    sg = 1 + ((dg / m) * specTint)
+                    sb = 1 + ((db / m) * specTint)
+                    print("normalized add = (%f, %f, %f) max = %f" % (sr,sg,sb,m))
+                    
+                    #----------------------- Clamp below 1
+                    m = max (sr, sg, sb)-1
+                    fr = sr - m
+                    fg = sg - m
+                    fb = sb - m
+                    print("n col = (%f, %f, %f) max = %f" % (fr,fg,fb,m))
+                    usdValue = str((fr, fg, fb))
+                    
+                if modoInputName == 'sheenTint':
+                    sheenTint = float(usdValue)
+                    usdValue = str((sheenTint, sheenTint, sheenTint))
    
     if  usdValue != originalValue:
         print("Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
@@ -1001,6 +1052,7 @@ def connectTextureOutputToShaderInput(output:UsdShade.Output, shader:UsdShade.Sh
         if input.Get() != None:
             return input.ConnectToSource(output)
         else:
+            #return createUsdShaderInput(shader, inputName, output, usdTypeMap[inputName])
             return createUsdShaderInput(shader, inputName, output, usdTypeMap[inputName])
     
     print("Effect %s not found in stringMap" % modoInputName)
