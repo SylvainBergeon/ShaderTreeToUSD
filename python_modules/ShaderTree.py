@@ -880,9 +880,7 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                         k = 20 # magic number, determine how fast the value reaches 1 when refIdx > 1
                         if modoInputName == 'specAmt': usdValue = 1-(1/(k*(x-1)+1)) #1-(1/((k*x)-(k-1)))
                         if modoInputName == 'refIndex': usdValue = refIdx
-                    
-                    
-                            
+                             
                 else:
                     specAmnt = float(xml.find('channels/specAmt').get('value'))
                     refIdx = float(xml.find('channels/specAmt').get('value'))
