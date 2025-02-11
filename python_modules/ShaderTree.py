@@ -684,20 +684,21 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                 effectName = xml.find('channels/effect').get('value')
                 materialPath = material.GetPath()
                 
-                #---------------------------------------------------- Create texture locator nodeGraph
+                #=============================================== Create texture locator nodeGraph
                 textureLocatorName = cleanName(xml.find('txtrLocator').get('name'))
                 nodeGraphPath = materialPath.AppendPath(textureLocatorName)
-                texLocNodeGraph = UsdShade.NodeGraph.Define(stage, nodeGraphPath)
-                texLocNodeGraph.CreateInput('space', Sdf.ValueTypeNames.String).Set("world") # can be "model" | "object" | "world" 
-                
                 localMatrix = xml.find('txtrLocator/channels/localMatrix/Matrix4')
+                
+                texLocNodeGraph = UsdShade.NodeGraph.Define(stage, nodeGraphPath)
+                texLocNodeGraph.CreateInput('space', Sdf.ValueTypeNames.String).Set("world") # can be "model" | "object" | "world"
+                scale:tuple = localMatrix.get("scale")
+                texLocNodeGraph.CreateInput('scale', Sdf.ValueTypeNames.Vector3f).Set((1/scale[0] * 2, 1/scale[1] * 2, 1/scale[2] * 2)) # act as frequency -> the greater, the small
                 texLocNodeGraph.CreateInput('position', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("position"))
-                texLocNodeGraph.CreateInput('scale', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("scale")) # act as frequency -> the greater, the small
                 texLocNodeGraph.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(0.0)
                 texLocNodeGraph.CreateInput('axis', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("rotation"))
                 texLocatorOutput = texLocNodeGraph.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
                 
-                #---------------------------------------------------- Create texture in nodeGraph
+                #---------------------------------------------------- Create texture locator in nodeGraph
                 locatorScale = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("set"))
                 locatorScale.CreateIdAttr('ND_position_vector3')
                 locatorScale.CreateInput('space', Sdf.ValueTypeNames.String).ConnectToSource(texLocNodeGraph.GetInput('space'))
@@ -709,13 +710,6 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                 locatorScale.CreateInput('in1', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
                 locatorScale.CreateInput('in2', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('scale'))
                 output = locatorScale.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-                
-                #---------------------------------------------------- Create texture locator scale in nodeGraph to convert scale to frequency
-                locatorReScale = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("rescale"))
-                locatorReScale.CreateIdAttr('ND_multiply_vector3')
-                locatorReScale.CreateInput('in1', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
-                locatorReScale.CreateInput('in2', Sdf.ValueTypeNames.Vector3f).Set((10000, 10000, 10000))
-                output = locatorReScale.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
                 
                 #---------------------------------------------------- Create texture locator rotate in nodeGraph
                 locatorRotation = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("rotation"))
@@ -733,6 +727,7 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                 output = locatorTranslate.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
                 
                 texLocatorOutput.ConnectToSource(output)
+                #==================================================
                 
                 #---------------------------------------------------- Create texture definition even if modo layer is disabled
                 noisePath:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
@@ -746,7 +741,7 @@ def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element)
                 noiseShader.CreateInput("type", Sdf.ValueTypeNames.Int).Set(3) # 0:Perlin 1:Cell 2:Worley 3:Fractal
                 
                 #---------------------------------------------------- Post Process
-                noiseShader.CreateInput("outmin", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value1').get('value')))
+                noiseShader.CreateInput("outmin", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value1').get('value'))/2 + 0.5)
                 noiseShader.CreateInput("outmax", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value2').get('value')))
                 noiseShader.CreateInput("clampoutput", Sdf.ValueTypeNames.Int).Set(0)
                 
