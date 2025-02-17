@@ -102,7 +102,6 @@ filters[lx.symbol.sITYPE_MASK] = [
     "render",
     "submask"
     ]
-filters[lx.symbol.sITYPE_CONSTANT] = []
 filters[lx.symbol.sITYPE_IMAGEMAP] = [
     "aa",
     "aaVal",
@@ -137,8 +136,6 @@ filters[lx.symbol.sITYPE_IMAGEMAP] = [
     "textureColor",
     "textureValue"
     ]
-filters[lx.symbol.sITYPE_DEFAULTSHADER] = []
-filters[lx.symbol.sITYPE_RENDEROUTPUT] = []
 filters[lx.symbol.sITYPE_VIDEOSTILL] = [
     "enable",
     "blend",
@@ -164,6 +161,10 @@ filters[lx.symbol.sITYPE_TEXTURELOC] = [
     "triplanarBlending", 
     
 ]
+
+filters[lx.symbol.sITYPE_DEFAULTSHADER] = []
+filters[lx.symbol.sITYPE_RENDEROUTPUT] = []
+filters[lx.symbol.sITYPE_CONSTANT] = []
 
 channelTypeMap = {
     lx.symbol.iCHANTYPE_EVAL:       "eval",
@@ -383,9 +384,6 @@ stdMatChannelMap[lx.symbol.sITYPE_MASK] = {
     "render":       "",
     "submask":      ""
     }
-stdMatChannelMap[lx.symbol.sITYPE_CONSTANT] = {}
-stdMatChannelMap[lx.symbol.sITYPE_DEFAULTSHADER] = {}
-stdMatChannelMap[lx.symbol.sITYPE_RENDEROUTPUT] = {}
 stdMatChannelMap[lx.symbol.sITYPE_TEXTURELOC] = {
     "uvMap":        "",
     "useUDIM":      "",
@@ -395,6 +393,10 @@ stdMatChannelMap[lx.symbol.sITYPE_TEXTURELOC] = {
     "tileU":        "Wraps",
     "tileV":        "Wrapt"
 }
+
+stdMatChannelMap[lx.symbol.sITYPE_CONSTANT] = {}
+stdMatChannelMap[lx.symbol.sITYPE_DEFAULTSHADER] = {}
+stdMatChannelMap[lx.symbol.sITYPE_RENDEROUTPUT] = {}
 
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
