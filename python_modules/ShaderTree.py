@@ -437,9 +437,7 @@ def writeUsda(filename:str, xml:ET.Element):
     stage = Usd.Stage.CreateNew(filename + '.usda')
     
     context = ShadingContext()
-    context.path = "/shadertree"
-    context.parentPath = "/"
-    usdExportShaderTree(stage, context, xml)
+    usdExportShaderTree(stage, "/shadertree", context, xml)
     
     stage.GetRootLayer().Save()
     print("... usd saved")
@@ -601,39 +599,46 @@ def cleanName(name:str) -> str:
     return name.replace(" ", "_").replace("(", "").replace(")", "")
 
 # Recursive shader tree parsing
-def usdExportShaderTree(stage:Usd.Stage, context:ShadingContext, xml:ET.Element) -> ShadingContext:
+def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
     
     #TODO : find a way to manage the override system using stacking priority, blending amount and blending type (mult, add, substract etc...)
-    
+    stage.relo
     match elementName:
         #------------------------------------------------------- If shadertree root, explore all childs set shadertree path
         case 'polyRender':
             if (context.material == None):
-                path = "/shadertree"
-            else:
-                path = "/"
+                newpath = path
             print("create SHADERTREE at %s" % (path))
             
-            UsdGeom.Scope.Define(stage, path)
+            UsdGeom.Scope.Define(stage, newpath)
             
             for child in xml.findall('*'):
-                context = usdExportShaderTree(stage, context, child)
+                context = usdExportShaderTree(stage, newpath, context, child)
 
         #------------------------------------------------------- If mask, explore all child layers
         case 'mask':
             if xml.find("channels/enable").get('value') == "1" :
-                path = "/shadertree/" +  cleanName(xml.get('name'))
-                print("create MASK at %s" % (path))
-                #---------------------------------------------------- Create material definition
-                material = UsdShade.Material.Define(stage, path)
-                context.material = material
-                context.path = path
+                ptag = xml.find("channels/ptag").get("value")
+                
+                if ptag != "":
+                    newpath = path + "/" +  ptag
+                    print("create MASK at %s" % (newpath))
+                    #---------------------------------------------------- Create material definition
+                    material = UsdShade.Material.Define(stage, newpath)
+                    context.material = material
+                else:
+                    newpath = path + "/" +  cleanName(xml.get('name'))
+                    print("create SCOPE at %s" % (newpath))
+                    #---------------------------------------------------- Create sub scope definition
+                    UsdGeom.Scope.Define(stage, newpath)
+                
+                print(newpath)
                 
                 for child in xml.findall('*'):
                     if child.tag != "channels":
-                        context = usdExportShaderTree(stage, context, child)    
+                        context = usdExportShaderTree(stage, newpath, context, child)    
                     else:
                         pass
             
