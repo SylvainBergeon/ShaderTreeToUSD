@@ -606,7 +606,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
     elementName = xml.tag
     
     #TODO : find a way to manage the override system using stacking priority, blending amount and blending type (mult, add, substract etc...)
-    stage.relo
+    
     match elementName:
         #------------------------------------------------------- If shadertree root, explore all childs set shadertree path
         case 'polyRender':
@@ -629,6 +629,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                     print("create MASK at %s" % (newpath))
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
+                    #material.GetPrim().CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('material_' + ptag)
                     context.material = material
                 else:
                     newpath = path + "/" +  cleanName(xml.get('name'))
