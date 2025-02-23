@@ -1,13 +1,13 @@
 # python
 
+import os
+import shutil
+from datetime import datetime
 import sys
 import lx
-import lxu
-import lxu.meta
 import lxu.object
 import lxu.select
 import lxu.service
-import lxifc
 import modo
 import json
 import math
@@ -35,8 +35,10 @@ if sys.version_info[0] == 3:
 # false is mostly intended for raw export and debug, it should be a little bit slower
 # and should generate bigger xml output file but it can be usefull for importing data
 # in software that are not usd compliant
-
 preFilterChannels = False
+
+# consolidateScene : Optional copy all used textures to a sub folder
+consolidateScene = True
 
 # exportGlPreviewMaterial writes Gl shaders
 exportGlPreviewMaterial = False
@@ -183,8 +185,15 @@ usdInputMap = {
     },
     "effect":{
         "diffColor":"base_color",
+        "diffAmount":"base",
         "rough":"specular_roughness",
         "normal":"in",
+        "objectNormal":"in",
+        "bump":"normal",
+        "stencil":"in",
+        "specAmount":"specular",
+        "reflFresnel":"specular",
+        "specFresnel":"specular",
         "tranAmount":"transmission",
         "lumiAmount":"emission",
         "lumiColor":"emission_color",
@@ -422,8 +431,19 @@ def export_basic_execute(Cmd_obj, msg):
     #----------- as usda
     writeUsda(fileName, xmlShaderTree)
     
-    #----------- transform and write xml
-    # to do ....
+    #----------- consolidate scene
+    if consolidateScene == True:
+        videoStillFileList = xmlShaderTree.findall(".//videoStill/channels/filename") #.get("value")  # Liste des fichiers à copier
+        fileList = []
+        for e in videoStillFileList:
+            filename = e.get("value")
+            print(filename)
+            fileList.append(filename)
+    
+        suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
+        projectPath = basestring(fileName).removesuffix(suffix)
+        destinationPath = projectPath + "exported_textures"
+        copy_and_clean_files(fileList, destinationPath)
 
 # Write the data as XML
 def writeXml(fileName, xml:ET.Element):
@@ -597,8 +617,9 @@ def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str
 
 # Clean the shadertree layers names (remove white space and parenthesis)
 def cleanName(name:str) -> str:
-    #print(name)
-    return name.replace(" ", "_").replace("(", "").replace(")", "")
+    print("->" + name)
+    if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
+    return name.replace(" ", "_").replace("(", "").replace(")", "").replace("-", "_").replace(".", "_").replace(":", "_").replace("#", "_")
 
 # Recursive shader tree parsing
 def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
@@ -625,15 +646,16 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 ptag = xml.find("channels/ptag").get("value")
                 
                 if ptag != "":
-                    newpath = path + "/" +  ptag
-                    print("create MASK at %s" % (newpath))
+                    print(ptag)
+                    newpath = path + "/" + cleanName(ptag)
+                    print("create MASK at [%s]" % (newpath))
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
                     #material.GetPrim().CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('material_' + ptag)
                     context.material = material
                 else:
                     newpath = path + "/" +  cleanName(xml.get('name'))
-                    print("create SCOPE at %s" % (newpath))
+                    print("create SCOPE at [%s]" % (newpath))
                     #---------------------------------------------------- Create sub scope definition
                     UsdGeom.Scope.Define(stage, newpath)
                 
@@ -650,7 +672,9 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             material:UsdShade.Material = context.material
             shader:UsdShade.Shader = context.shader
             previewShader:UsdShade.Shader = context.previewShader
-            path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
+            name = cleanName(xml.get('name'))
+            print(name)
+            path:Path = material.GetPath().AppendPath(name)
             
             #---------------------------------------------------- Connect texture to shader and previewShader inputs if possible
             if xml.find('channels/enable').get('value') == "1":
@@ -855,9 +879,9 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                              
                 else:
                     specAmnt = float(xml.find('channels/specAmt').get('value'))
-                    refIdx = float(xml.find('channels/specAmt').get('value'))
+                    refIdx = float(xml.find('channels/refIndex').get('value'))
                     if modoInputName == 'specAmt': usdValue = 1.0
-                    if modoInputName == 'refIndex': usdValue = 1 / (specAmnt * specAmnt) #1 + math.sqrt(specAmnt * .99999)
+                    if modoInputName == 'refIndex': usdValue =  2 / (1 - math.sqrt(specAmnt * .99999)) - 1
                     
                     if modoInputName == 'specTint': usdValue = xml.find('channels/specTint').get('value')
                     if modoInputName == 'specCol': usdValue = "(1.0, 1.0, 1.0)"
@@ -925,8 +949,9 @@ def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfT
 
 # Create and connect USD texture Shader when image found in the shader tree
 def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Input: 
-
+    print(outType)
     material:UsdShade.Material = context.material
+    print(material.GetPath())
     # shader:UsdShade.Shader = context.shader
     # advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
     # previewShader:UsdShade.Shader = context.previewShader
@@ -952,7 +977,7 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
             brightnessOut = brightness
             contrastOut = contrast
             
-        case Sdf.ValueTypeNames.Color3f:
+        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
             textureNodeType = "ND_image_color3"
             textureRangeNodeType = "ND_remap_color3"
             textureInvertNodeType = "ND_invert_color3"
@@ -1096,7 +1121,8 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
         match effectName:
             case "stencil":
                 #---------------------------------------------------- Create texture definition even if modo layer is disabled
-                textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, material, path, xml, Sdf.ValueTypeNames.Color3f)
+                #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Color3f)
+                textureOutput = output
                 #---------------------------------------------------- Trick : Create invert color and connect to texture
                 path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')+ "_invert_color"))
                 mathShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
@@ -1117,7 +1143,8 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
                 
             case "bump":
                 #---------------------------------------------------- Create texture definition even if modo layer is disabled
-                textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, material, path, xml, Sdf.ValueTypeNames.Float)
+                #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Vector3f)
+                textureOutput = output
                 
                 #---------------------------------------------------- Retrieve displace value in parent/channels node
                 bumpHeight = float(advancedMaterialChannels.find("bumpAmp").get("value"))
@@ -1139,7 +1166,8 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
             
             case "normal":
                 #---------------------------------------------------- Create texture definition even if modo layer is disabled
-                textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, material, path, xml, Sdf.ValueTypeNames.Color3f)
+                #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Color3f)
+                textureOutput = output
                 
                 #---------------------------------------------------- Retrieve displace value in parent/channels node
                 normalHeight = 0.0 #--------------------------------- unfortynately, this value is not given by modo
@@ -1288,3 +1316,45 @@ def isFiltered(chName:str, itemType:str=None):
     
     #---------------------------------------------- Ignore everything else
     return False
+
+def copy_and_clean_files(fileList, destinationPath):
+    # Créer le dossier destination s'il n'existe pas
+    if not os.path.exists(destinationPath):
+        os.makedirs(destinationPath)
+
+    # Liste des fichiers présents dans destinationPath
+    existing_files = {f: os.path.join(destinationPath, f) for f in os.listdir(destinationPath)}
+    
+    # Copier les fichiers en vérifiant leur date de modification
+    for file in fileList:
+        if os.path.exists(file):  # Vérifie que le fichier source existe
+            file_name = os.path.basename(file)
+            dest_file = os.path.join(destinationPath, file_name)
+
+            # Vérifier si le fichier existe déjà et comparer les dates
+            if os.path.exists(dest_file):
+                src_mtime = os.path.getmtime(file)
+                dest_mtime = os.path.getmtime(dest_file)
+
+                if src_mtime > dest_mtime:  # Si le fichier source est plus récent
+                    shutil.copy2(file, dest_file)
+                    print(f"📂 Fichier mis à jour : {file_name}")
+            else:
+                shutil.copy2(file, dest_file)
+                print(f"✅ Fichier copié : {file_name}")
+
+            # Supprimer ce fichier de la liste des fichiers existants
+            existing_files.pop(file_name, None)
+
+    # Déplace les fichiers inutilisés si besoin
+    if len(existing_files) > 0:
+        # Dossier "unused" pour les fichiers obsolètes
+        unusedPath = os.path.join(destinationPath, "unused")
+        if not os.path.exists(unusedPath):
+            os.makedirs(unusedPath)
+            
+        # Déplacer les fichiers non présents dans fileList vers "unused"
+        for old_file in existing_files.values():
+            unused_file = os.path.join(unusedPath, os.path.basename(old_file))
+            shutil.move(old_file, unusedPath)
+            print(f"📦 Fichier déplacé dans 'unused' : {old_file}")
