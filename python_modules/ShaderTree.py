@@ -5,9 +5,6 @@ import shutil
 from datetime import datetime
 import sys
 import lx
-import lxu.object
-import lxu.select
-import lxu.service
 import modo
 import json
 import math
@@ -437,7 +434,6 @@ def export_basic_execute(Cmd_obj, msg):
         fileList = []
         for e in videoStillFileList:
             filename = e.get("value")
-            print(filename)
             fileList.append(filename)
     
         suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
