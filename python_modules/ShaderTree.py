@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import re
 from datetime import datetime
 import sys
 import lx
@@ -430,7 +431,7 @@ def export_basic_execute(Cmd_obj, msg):
     
     #----------- consolidate scene
     if consolidateScene == True:
-        videoStillFileList = xmlShaderTree.findall(".//videoStill/channels/filename") #.get("value")  # Liste des fichiers à copier
+        videoStillFileList = xmlShaderTree.findall(".//videoStill/channels/filename")
         fileList = []
         for e in videoStillFileList:
             filename = e.get("value")
@@ -469,7 +470,9 @@ def writeJson(filename, dictionary):
 # Recursively convert the shader tree structure to xml
 def xmlExportItem(item:modo.Item):
     out_xml = ET.Element(item.type)
-    out_xml.set('name',str(item.name).replace(" ", "_").replace("(", "").replace(")", ""))
+    #out_xml.set('name',str(item.name).replace(" ", "_").replace("(", "").replace(")", ""))
+    out_xml.set('name', replace_chars(str(item.name), ["(", ")", " "], "_"))
+    out_xml.set('name', cleanName(str(item.name)))
     out_xml.set('id', item.id)
     out_xml.set('type', item.type)
     
@@ -611,12 +614,6 @@ def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str
     
     return chan
 
-# Clean the shadertree layers names (remove white space and parenthesis)
-def cleanName(name:str) -> str:
-    print("->" + name)
-    if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
-    return name.replace(" ", "_").replace("(", "").replace(")", "").replace("-", "_").replace(".", "_").replace(":", "_").replace("#", "_")
-
 # Recursive shader tree parsing
 def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
@@ -629,7 +626,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
         case 'polyRender':
             if (context.material == None):
                 newpath = path
-            print("create SHADERTREE at %s" % (path))
+            print("✅ Create SHADERTREE at %s" % (path))
             
             UsdGeom.Scope.Define(stage, newpath)
             
@@ -642,20 +639,17 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 ptag = xml.find("channels/ptag").get("value")
                 
                 if ptag != "":
-                    print(ptag)
                     newpath = path + "/" + cleanName(ptag)
-                    print("create MASK at [%s]" % (newpath))
+                    print("✅ create MASK at [%s]" % (newpath))
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
                     #material.GetPrim().CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('material_' + ptag)
                     context.material = material
                 else:
                     newpath = path + "/" +  cleanName(xml.get('name'))
-                    print("create SCOPE at [%s]" % (newpath))
+                    print("✅ Create SCOPE at [%s]" % (newpath))
                     #---------------------------------------------------- Create sub scope definition
                     UsdGeom.Scope.Define(stage, newpath)
-                
-                print(newpath)
                 
                 for child in xml.findall('*'):
                     if child.tag != "channels":
@@ -669,7 +663,6 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             shader:UsdShade.Shader = context.shader
             previewShader:UsdShade.Shader = context.previewShader
             name = cleanName(xml.get('name'))
-            print(name)
             path:Path = material.GetPath().AppendPath(name)
             
             #---------------------------------------------------- Connect texture to shader and previewShader inputs if possible
@@ -766,7 +759,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if context.material is None: return context
             
             material:UsdShade.Material = context.material
-            print("create ADVANCED MATERIAL at %s" % (material.GetPath()))
+            print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
             #---------------------------------------------------- Create material definition
             shader = createUsdShader(stage, material, xml, False)
             context.shader = shader
@@ -791,13 +784,13 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
         connectorOut = "surface"
         materialConnector = ""
         surfaceId = "UsdPreviewSurface"
-        print ("create PREVIEW SHADER at : %s" % path)
+        print ("✅ Create PREVIEW SHADER at : %s" % path)
     else:
         brdfType = xml.find('channels/brdfType').get('value')
         connectorOut = 'surface'
         materialConnector = "mtlx:"
         surfaceId = "ND_standard_surface_surfaceshader"
-        print ("create SHADER at : %s" % path)
+        print ("✅ Create SHADER at : %s" % path)
     
         
     shader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
@@ -910,14 +903,14 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     usdValue = str((sheenTint, sheenTint, sheenTint))
    
     if  usdValue != originalValue:
-        print("Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
+        print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
         
     return usdValue
 
 # Create USD Shader input according to modo channel scopped
 def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input: 
     if usdInputName != None and type(usdValue) != None:
-        print("SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
+        print("🔁 SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
         if type(usdValue) is UsdShade.Output:
             return shaderRef.CreateInput(usdInputName, sdfType).ConnectToSource(usdValue)
         else :
@@ -944,10 +937,8 @@ def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfT
     return None
 
 # Create and connect USD texture Shader when image found in the shader tree
-def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Input: 
-    print(outType)
+def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Input:
     material:UsdShade.Material = context.material
-    print(material.GetPath())
     # shader:UsdShade.Shader = context.shader
     # advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
     # previewShader:UsdShade.Shader = context.previewShader
@@ -1209,7 +1200,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
         else:
             return createUsdShaderInput(shader, inputName, output, usdTypeMap[inputName])
     
-    print("Effect %s not found in stringMap" % effectName)
+    print("⁉️ Effect %s not found in stringMap" % effectName)
     return None
 
 # Format any channel value to given type
@@ -1354,3 +1345,18 @@ def copy_and_clean_files(fileList, destinationPath):
             unused_file = os.path.join(unusedPath, os.path.basename(old_file))
             shutil.move(old_file, unusedPath)
             print(f"📦 Fichier déplacé dans 'unused' : {old_file}")
+
+# Clean the shadertree layers names (remove white space and parenthesis)
+def cleanName(name:str) -> str:
+    if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
+    name = replace_chars(name, ["(", ")"], "")
+    name = replace_chars(name, ["(", ")", " ", "-", ".", ":", "#", ";", "?", ","], "_")
+    return name
+
+def remove_chars(string, chars_to_remove):
+    translation_table = str.maketrans("", "", "".join(chars_to_remove))
+    return string.translate(translation_table)
+
+def replace_chars(string, chars_to_remove, replacement):
+    pattern = "[" + re.escape("".join(chars_to_remove)) + "]"
+    return re.sub(pattern, replacement, string)
