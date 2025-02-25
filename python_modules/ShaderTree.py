@@ -3,7 +3,6 @@
 import os
 import shutil
 import re
-from datetime import datetime
 import sys
 import lx
 import modo
@@ -1304,7 +1303,7 @@ def isFiltered(chName:str, itemType:str=None):
     #---------------------------------------------- Ignore everything else
     return False
 
-def copy_and_clean_files(fileList, destinationPath):
+def copy_and_clean_files(fileList, destinationPath): #----- Chat GPT code there
     # Créer le dossier destination s'il n'existe pas
     if not os.path.exists(destinationPath):
         os.makedirs(destinationPath)
