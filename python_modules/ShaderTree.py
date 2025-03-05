@@ -40,6 +40,13 @@ consolidateScene = True
 # exportGlPreviewMaterial writes Gl shaders
 exportGlPreviewMaterial = False
 
+# Output log options
+verbose = False
+verboseSetValue = True
+verboseCreateShader = True
+verboseOverrideValue = True
+verboseModifyTree = True
+
 class ShadingContext:
     material: UsdShade.Material = None
     shader: UsdShade.Shader = None
@@ -625,7 +632,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
         case 'polyRender':
             if (context.material == None):
                 newpath = path
-            print("✅ Create SHADERTREE at %s" % (path))
+            if (verbose):print("✅ Create SHADERTREE at %s" % (path))
             
             UsdGeom.Scope.Define(stage, newpath)
             
@@ -639,14 +646,14 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 
                 if ptag != "":
                     newpath = path + "/" + cleanName(ptag)
-                    print("✅ create MASK at [%s]" % (newpath))
+                    if (verbose and verboseModifyTree):print("✅ create MASK at [%s]" % (newpath))
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
                     #material.GetPrim().CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('material_' + ptag)
                     context.material = material
                 else:
                     newpath = path + "/" +  cleanName(xml.get('name'))
-                    print("✅ Create SCOPE at [%s]" % (newpath))
+                    if (verbose and verboseModifyTree):print("✅ Create SCOPE at [%s]" % (newpath))
                     #---------------------------------------------------- Create sub scope definition
                     UsdGeom.Scope.Define(stage, newpath)
                 
@@ -668,7 +675,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if xml.find('channels/enable').get('value') == "1":
                 effectName = xml.find('channels/effect').get('value')
                 sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
-                print("create IMAGEMAP at %s as %s" % (path, effectName))
+                if (verbose and verboseModifyTree):print("create IMAGEMAP at %s as %s" % (path, effectName))
                 
                 textureOutput:UsdShade.Output = createUsdTextureOutput(stage, context, xml, sdfType)
                 connectTextureOutputToShaderInput(stage, context, effectName, textureOutput, xml)
@@ -682,50 +689,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 effectName = xml.find('channels/effect').get('value')
                 materialPath = material.GetPath()
                 
-                #=============================================== Create texture locator nodeGraph
-                textureLocatorName = cleanName(xml.find('txtrLocator').get('name'))
-                nodeGraphPath = materialPath.AppendPath(textureLocatorName)
-                localMatrix = xml.find('txtrLocator/channels/localMatrix/Matrix4')
-                
-                texLocNodeGraph = UsdShade.NodeGraph.Define(stage, nodeGraphPath)
-                texLocNodeGraph.CreateInput('space', Sdf.ValueTypeNames.String).Set("world") # can be "model" | "object" | "world"
-                scale:tuple = localMatrix.get("scale")
-                texLocNodeGraph.CreateInput('scale', Sdf.ValueTypeNames.Vector3f).Set((1/scale[0] * 2, 1/scale[1] * 2, 1/scale[2] * 2)) # act as frequency -> the greater, the small
-                texLocNodeGraph.CreateInput('position', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("position"))
-                texLocNodeGraph.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(0.0)
-                texLocNodeGraph.CreateInput('axis', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("rotation"))
-                texLocatorOutput = texLocNodeGraph.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-                
-                #---------------------------------------------------- Create texture locator in nodeGraph
-                locatorScale = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("set"))
-                locatorScale.CreateIdAttr('ND_position_vector3')
-                locatorScale.CreateInput('space', Sdf.ValueTypeNames.String).ConnectToSource(texLocNodeGraph.GetInput('space'))
-                output = locatorScale.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-                
-                #---------------------------------------------------- Create texture locator scale in nodeGraph
-                locatorScale = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("scale"))
-                locatorScale.CreateIdAttr('ND_multiply_vector3')
-                locatorScale.CreateInput('in1', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
-                locatorScale.CreateInput('in2', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('scale'))
-                output = locatorScale.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-                
-                #---------------------------------------------------- Create texture locator rotate in nodeGraph
-                locatorRotation = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("rotation"))
-                locatorRotation.CreateIdAttr('ND_rotate3d_vector3')
-                locatorRotation.CreateInput('in', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
-                locatorRotation.CreateInput('amount', Sdf.ValueTypeNames.Float).ConnectToSource(texLocNodeGraph.GetInput('rotation'))
-                locatorRotation.CreateInput('axis', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('axis'))
-                output = locatorRotation.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-                
-                #---------------------------------------------------- Create texture locator position in nodeGraph
-                locatorTranslate = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("translate"))
-                locatorTranslate.CreateIdAttr('ND_add_vector3')
-                locatorTranslate.CreateInput('in1', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
-                locatorTranslate.CreateInput('in2', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('position'))
-                output = locatorTranslate.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-                
-                texLocatorOutput.ConnectToSource(output)
-                #==================================================
+                texLocatorOutput = create3DTextureLocator(stage, materialPath, xml)
                 
                 #---------------------------------------------------- Create texture definition even if modo layer is disabled
                 noisePath:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
@@ -758,7 +722,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if context.material is None: return context
             
             material:UsdShade.Material = context.material
-            print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
+            if (verbose and verboseModifyTree):print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
             #---------------------------------------------------- Create material definition
             shader = createUsdShader(stage, material, xml, False)
             context.shader = shader
@@ -767,8 +731,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if (exportGlPreviewMaterial):
                 previewShader = createUsdShader(stage, material, xml, True)
                 context.previewShader = previewShader
-            
-        
+ 
     return context
 
 # Create USD shader for advanced material layer
@@ -783,13 +746,13 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
         connectorOut = "surface"
         materialConnector = ""
         surfaceId = "UsdPreviewSurface"
-        print ("✅ Create PREVIEW SHADER at : %s" % path)
+        if (verbose and verboseCreateShader) :print ("✅ Create PREVIEW SHADER at : %s" % path)
     else:
         brdfType = xml.find('channels/brdfType').get('value')
         connectorOut = 'surface'
         materialConnector = "mtlx:"
         surfaceId = "ND_standard_surface_surfaceshader"
-        print ("✅ Create SHADER at : %s" % path)
+        if (verbose and verboseCreateShader) :print ("✅ Create SHADER at : %s" % path)
     
         
     shader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
@@ -902,14 +865,14 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     usdValue = str((sheenTint, sheenTint, sheenTint))
    
     if  usdValue != originalValue:
-        print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
+        if (verbose and verboseOverrideValue):print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
         
     return usdValue
 
 # Create USD Shader input according to modo channel scopped
 def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input: 
     if usdInputName != None and type(usdValue) != None:
-        print("🔁 SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
+        if (verbose and verboseSetValue):print("🔁 SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
         if type(usdValue) is UsdShade.Output:
             return shaderRef.CreateInput(usdInputName, sdfType).ConnectToSource(usdValue)
         else :
@@ -941,8 +904,11 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     # shader:UsdShade.Shader = context.shader
     # advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
     # previewShader:UsdShade.Shader = context.previewShader
-    path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
+    materialPath = material.GetPath()
+    #---------------------------------------------------- Create the texture locator
+    textureTransformOutput = createTextureLocator(stage, materialPath, xml)
     
+    texturePath:Path = materialPath.AppendPath(cleanName(xml.get('name')))
     invert = int(xml.find("channels/invert").get('value'))
     srcLow = float(xml.find('channels/min').get('value'))
     srcHigh = float(xml.find('channels/max').get('value'))
@@ -950,78 +916,59 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     contrast = float(xml.find('channels/contrast').get('value'))
     swizzling = xml.find('channels/swizzling').get('value') == "1"
     swizzlingOut = xml.find('channels/rgba').get('value')
-    
-    match outType:
-        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
-            textureNodeType = "ND_image_float"
-            textureRangeNodeType = "ND_remap_float"
-            textureInvertNodeType = "ND_invert_float"
-            textureContrastNodeType = "ND_contrast"
-            textureBrightnessNodeType = "ND_add"
-            textureRangeOutLow = srcLow
-            textureRangeOutHigh = srcHigh
-            brightnessOut = brightness
-            contrastOut = contrast
-            
-        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
-            textureNodeType = "ND_image_color3"
-            textureRangeNodeType = "ND_remap_color3"
-            textureInvertNodeType = "ND_invert_color3"
-            textureContrastNodeType = "ND_contrast_color3"
-            textureBrightnessNodeType = "ND_add_color3"
-            textureRangeOutLow = (srcLow, srcLow, srcLow)
-            textureRangeOutHigh = (srcHigh, srcHigh, srcHigh)
-            brightnessOut = (brightness,brightness,brightness)
-            contrastOut = (contrast,contrast,contrast)
-            
-        case Sdf.ValueTypeNames.Color4f:
-            textureNodeType = "ND_image_color4"
-            textureRangeNodeType = "ND_remap_color4"
-            textureInvertNodeType = "ND_invert_color4"
-            textureContrastNodeType = "ND_contrast_color4"
-            textureBrightnessNodeType = "ND_add_color4"
-            textureRangeOutLow = (srcLow, srcLow, srcLow, 1.0)
-            textureRangeOutHigh = (srcHigh, srcHigh, srcHigh, 1.0)
-            brightnessOut = (brightness,brightness,brightness,1.0)
-            contrastOut = (contrast,contrast,contrast,1.0)
-            
-    #---------------------------------------------------- Create the texture locator
-    stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
-    stReader.CreateIdAttr('ND_texcoord_vector2')
-    stReader.CreateInput('index', Sdf.ValueTypeNames.Int).Set(0)
-    stOutput:UsdShade.Output = stReader.CreateOutput('out', Sdf.ValueTypeNames.TexCoord2f)
+
+    #---------------------------------------------------- Define by projection type
+    projType = xml.find('txtrLocator/channels/projType').get('value')
+    print("projection type = %s" % projType)
     
     #---------------------------------------------------- Create the texture transform
-    uvTransform = UsdShade.Shader.Define(stage, str(path) + "_texture_transform")
-    uvTransform.CreateIdAttr('UsdTransform2d')
-    uvTransform.CreateInput('in', Sdf.ValueTypeNames.TexCoord2f).ConnectToSource(stOutput)
-    uvTransform.CreateInput('scale', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/wrapU').get('value')),float(xml.find('txtrLocator/channels/wrapV').get('value'))))
-    uvTransform.CreateInput('translation', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/m02').get('value')),float(xml.find('txtrLocator/channels/m12').get('value'))))
-    uvTransform.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(360 * float(xml.find('txtrLocator/channels/uvRotation').get('value')) / (2 * math.pi))
-    uvTransformOutput:UsdShade.Output = uvTransform.CreateOutput('result', Sdf.ValueTypeNames.TexCoord2f)
-    
-    #---------------------------------------------------- Create the texture
-    texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(path) + "_imageFile")
-    texture.CreateIdAttr(textureNodeType)
-    texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
-    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
-    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
-    texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(uvTransformOutput)
-    textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
-    
-    #=============================================== Create texture adjustments nodegraph
-    textureAdjustNodeGraphPath = str(path) + "_adjust"
+    textureTransformOutput:UsdShade.Output
+    match projType:
+        case "uv":
+            textureTransformOutput = createUVTextureLocator(stage, materialPath, xml)
+            #---------------------------------------------------- Create the UV texture
+            texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
+            texture.CreateIdAttr('ND_image' + getNodeTypePrefix(outType))
+            texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
+            texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
+            texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
+            texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformOutput)
+            textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
+            
+        case "triplanar" | "solid":
+            textureTransformOutput:UsdShade.Output = create3DTextureLocator(stage, materialPath, xml)
+            #---------------------------------------------------- Create the geometry normal node
+            geometryNormal:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_geoNormal")
+            geometryNormal.CreateIdAttr('ND_normal_vector3')
+            geometryNormalOut:UsdShade.Output = geometryNormal.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+            
+            #---------------------------------------------------- Create the triplanar texture node
+            blend = 1-float(xml.find('txtrLocator/channels/triplanarBlending').get('value'))
+            blendApprox = math.pi / (4 * math.sin(blend * math.pi / 4))
+            texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_triplanarTexture")
+            texture.CreateIdAttr('ND_triplanarprojection' + getNodeTypePrefix(outType))
+            texture.CreateInput('filex', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
+            texture.CreateInput('filey', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
+            texture.CreateInput('filez', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
+            texture.CreateInput('normal', Sdf.ValueTypeNames.Vector3f).ConnectToSource(geometryNormalOut)
+            texture.CreateInput('upaxis', Sdf.ValueTypeNames.Int).Set(1)
+            texture.CreateInput('blend', Sdf.ValueTypeNames.Float).Set(blendApprox)
+            texture.CreateInput("position", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformOutput)
+            textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
+
+    #---------------------------------------------------- Create texture adjustments nodegraph
+    textureAdjustNodeGraphPath = str(texturePath) + "_adjust"
     textureAdjustNodeGraph = UsdShade.NodeGraph.Define(stage, textureAdjustNodeGraphPath)
     textureAdjustNodeGraph.CreateInput('texture', outType).ConnectToSource(textureOutput)
     textureAdjustNodeGraph.CreateInput('invert', Sdf.ValueTypeNames.Int).Set(invert)
-    textureAdjustNodeGraph.CreateInput('outLow', outType).Set(textureRangeOutLow)
-    textureAdjustNodeGraph.CreateInput('outHigh', outType).Set(textureRangeOutHigh)
-    textureAdjustNodeGraph.CreateInput('brightness', outType).Set(brightnessOut)
-    textureAdjustNodeGraph.CreateInput('contrast', outType).Set(contrastOut)
+    textureAdjustNodeGraph.CreateInput('outLow', outType).Set(floatToOutType(srcLow, outType))
+    textureAdjustNodeGraph.CreateInput('outHigh', outType).Set(floatToOutType(srcHigh, outType))
+    textureAdjustNodeGraph.CreateInput('brightness', outType).Set(floatToOutType(brightness, outType))
+    textureAdjustNodeGraph.CreateInput('contrast', outType).Set(floatToOutType(contrast, outType))
     
     #---------------------------------------------------- Create image adjustments
     textureRange = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/valueRange")
-    textureRange.CreateIdAttr(textureRangeNodeType)
+    textureRange.CreateIdAttr('ND_remap' + getNodeTypePrefix(outType))
     textureRange.CreateInput("in", outType).ConnectToSource(textureAdjustNodeGraph.GetInput('texture'))
     textureRange.CreateInput('outlow', outType).ConnectToSource(textureAdjustNodeGraph.GetInput('outLow'))
     textureRange.CreateInput('outhigh', outType).ConnectToSource(textureAdjustNodeGraph.GetInput('outHigh'))
@@ -1029,14 +976,14 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     
     #---------------------------------------------------- Create contrast adjustments
     textureContrast = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/contrast")
-    textureContrast.CreateIdAttr(textureContrastNodeType)
+    textureContrast.CreateIdAttr('ND_contrast' + getNodeTypePrefix(outType))
     textureContrast.CreateInput("in", outType).ConnectToSource(adjustedTextureOutput)
     textureContrast.CreateInput('amount', outType).ConnectToSource(textureAdjustNodeGraph.GetInput('contrast'))
     adjustedTextureOutput:UsdShade.Output = textureContrast.CreateOutput('out', outType)
     
     #---------------------------------------------------- Create brightness adjustments
     textureBrightness = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/brightness")
-    textureBrightness.CreateIdAttr(textureBrightnessNodeType)
+    textureBrightness.CreateIdAttr('ND_add' + getNodeTypePrefix(outType))
     textureBrightness.CreateInput("in1", outType).ConnectToSource(adjustedTextureOutput)
     textureBrightness.CreateInput('in2', outType).ConnectToSource(textureAdjustNodeGraph.GetInput('brightness'))
     adjustedTextureOutput:UsdShade.Output = textureBrightness.CreateOutput('out', outType)
@@ -1061,7 +1008,7 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     # --------------------------------------------------- Invert
     if invert == 1:
         invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/invert")
-        invertShader.CreateIdAttr(textureInvertNodeType)
+        invertShader.CreateIdAttr('ND_invert' + getNodeTypePrefix(outType))
         invertShader.CreateInput("in", outType).ConnectToSource(adjustedTextureOutput)
         adjustedTextureOutput:UsdShade.Output = invertShader.CreateOutput('out', outType)
     
@@ -1092,6 +1039,113 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     
     return textureAdjustNodeGraph.GetOutput('out')
 
+def floatToOutType(value:float, outType:Sdf.ValueTypeNames):
+    match outType:
+        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
+            return value
+            
+        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
+            return (value, value, value)
+            
+        case Sdf.ValueTypeNames.Color4f:
+            return (value, value, value, 1.0)
+
+def getNodeTypePrefix(outType):
+    match outType:
+        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
+            return "_float"
+            
+        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
+            return "_color3"
+            
+        case Sdf.ValueTypeNames.Color4f:
+            return "_color4"
+    
+
+def createTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+    #---------------------------------------------------- Define by projection type
+    projType = xml.find('txtrLocator/channels/projType').get('value')
+    print("projection type = %s" % projType)
+    
+    #---------------------------------------------------- Create the texture transform
+    textureTransformOutput:UsdShade.Output
+    match projType:
+        case "uv":
+            textureTransformOutput = createUVTextureLocator(stage, path, xml)
+            
+        case "triplanar" | "solid":
+            textureTransformOutput:UsdShade.Output = create3DTextureLocator(stage, path, xml)
+    
+    return textureTransformOutput
+
+def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+    #---------------------------------------------------- Create the texture reader
+    # stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
+    # stReader.CreateIdAttr('ND_texcoord_vector2')
+    # stReader.CreateInput('index', Sdf.ValueTypeNames.Int).Set(0)
+    # stOutput:UsdShade.Output = stReader.CreateOutput('out', Sdf.ValueTypeNames.TexCoord2f)
+    
+    #---------------------------------------------------- Create the uv coordinates
+    uvTransform = UsdShade.Shader.Define(stage, str(path) + "_texture_transform")
+    uvTransform.CreateIdAttr('UsdTransform2d')
+    uvTransform.CreateInput('scale', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/wrapU').get('value')),float(xml.find('txtrLocator/channels/wrapV').get('value'))))
+    uvTransform.CreateInput('translation', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/m02').get('value')),float(xml.find('txtrLocator/channels/m12').get('value'))))
+    uvTransform.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(360 * float(xml.find('txtrLocator/channels/uvRotation').get('value')) / (2 * math.pi))
+    textureTransformOutput:UsdShade.Output = uvTransform.CreateOutput('result', Sdf.ValueTypeNames.TexCoord2f)
+    
+    return textureTransformOutput
+
+def create3DTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+    # this implements a basic node structure to allow for 3d textures,
+    # but the lack of documentation and the complexity of the modo coordinate system makes it weird
+    # maybe someone here can help sort this out
+    localMatrix = xml.find('txtrLocator/channels/localMatrix/Matrix4')
+    
+    textureLocatorName = cleanName(xml.find('txtrLocator').get('name'))
+    nodeGraphPath = path.AppendPath(textureLocatorName)
+    localMatrix = xml.find('txtrLocator/channels/localMatrix/Matrix4')
+    
+    texLocNodeGraph = UsdShade.NodeGraph.Define(stage, nodeGraphPath)
+    texLocNodeGraph.CreateInput('space', Sdf.ValueTypeNames.String).Set("world") # can be "model" | "object" | "world"
+    scale:tuple = localMatrix.get("scale")
+    texLocNodeGraph.CreateInput('scale', Sdf.ValueTypeNames.Vector3f).Set((1/scale[0], 1/scale[1], 1/scale[2])) # act as frequency -> the greater, the small
+    texLocNodeGraph.CreateInput('position', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("position"))
+    texLocNodeGraph.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(0.0)
+    texLocNodeGraph.CreateInput('axis', Sdf.ValueTypeNames.Vector3f).Set(localMatrix.get("rotation"))
+    textureTransformOutput = texLocNodeGraph.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+    
+    #---------------------------------------------------- Create texture locator in nodeGraph
+    locatorScale = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("set"))
+    locatorScale.CreateIdAttr('ND_position_vector3')
+    locatorScale.CreateInput('space', Sdf.ValueTypeNames.String).ConnectToSource(texLocNodeGraph.GetInput('space'))
+    output = locatorScale.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+    
+    #---------------------------------------------------- Create texture locator scale in nodeGraph
+    locatorScale = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("scale"))
+    locatorScale.CreateIdAttr('ND_multiply_vector3')
+    locatorScale.CreateInput('in1', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
+    locatorScale.CreateInput('in2', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('scale'))
+    output = locatorScale.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+    
+    #---------------------------------------------------- Create texture locator rotate in nodeGraph
+    locatorRotation = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("rotation"))
+    locatorRotation.CreateIdAttr('ND_rotate3d_vector3')
+    locatorRotation.CreateInput('in', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
+    locatorRotation.CreateInput('amount', Sdf.ValueTypeNames.Float).ConnectToSource(texLocNodeGraph.GetInput('rotation'))
+    locatorRotation.CreateInput('axis', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('axis'))
+    output = locatorRotation.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+    
+    #---------------------------------------------------- Create texture locator position in nodeGraph
+    locatorTranslate = UsdShade.Shader.Define(stage, nodeGraphPath.AppendPath("translate"))
+    locatorTranslate.CreateIdAttr('ND_add_vector3')
+    locatorTranslate.CreateInput('in1', Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
+    locatorTranslate.CreateInput('in2', Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocNodeGraph.GetInput('position'))
+    output = locatorTranslate.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+    
+    textureTransformOutput.ConnectToSource(output)
+    
+    return textureTransformOutput
+    
 # Connect a texture to the relevant shader
 def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, xml:ET.Element) -> UsdShade.Input:
     
