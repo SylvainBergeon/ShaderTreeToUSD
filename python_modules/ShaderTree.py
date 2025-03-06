@@ -42,9 +42,9 @@ exportGlPreviewMaterial = False
 
 # Output log options
 verbose = True
-verboseSetValue = True
-verboseCreateShader = True
-verboseOverrideValue = True
+verboseSetValue = False
+verboseCreateShader = False
+verboseOverrideValue = False
 verboseModifyTree = True
 verboseConsolidate = True
 
@@ -641,7 +641,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 
                 if ptag != "":
                     newpath = path + "/" + cleanName(ptag)
-                    if (verbose and verboseModifyTree):print("✅ create MASK at [%s]" % (newpath))
+                    if (verbose and verboseModifyTree):print("✅ Create MASK at [%s]" % (newpath))
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
                     #material.GetPrim().CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('material_' + ptag)
@@ -670,7 +670,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if xml.find('channels/enable').get('value') == "1":
                 effectName = xml.find('channels/effect').get('value')
                 sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
-                if (verbose and verboseModifyTree):print("create IMAGEMAP at %s as %s" % (path, effectName))
+                if (verbose and verboseModifyTree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
                 
                 textureOutput:UsdShade.Output = createUsdTextureOutput(stage, context, xml, sdfType)
                 connectTextureOutputToShaderInput(stage, context, effectName, textureOutput, xml)
