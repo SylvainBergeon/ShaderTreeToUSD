@@ -41,11 +41,12 @@ consolidateScene = True
 exportGlPreviewMaterial = False
 
 # Output log options
-verbose = False
+verbose = True
 verboseSetValue = True
 verboseCreateShader = True
 verboseOverrideValue = True
 verboseModifyTree = True
+verboseConsolidate = True
 
 class ShadingContext:
     material: UsdShade.Material = None
@@ -411,11 +412,16 @@ stdMatChannelMap[lx.symbol.sITYPE_CONSTANT] = {}
 stdMatChannelMap[lx.symbol.sITYPE_DEFAULTSHADER] = {}
 stdMatChannelMap[lx.symbol.sITYPE_RENDEROUTPUT] = {}
 
+scene = modo.scene.current()
+fileName = basestring(scene.filename).removesuffix(".lxo")
+suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
+projectPath = basestring(fileName).removesuffix(suffix)
+consolidatePath = projectPath + suffix + "_textures"
+textureList = dict()
+
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
     
-    scene = modo.scene.current()
-
     rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(rendererId)
     
@@ -424,8 +430,6 @@ def export_basic_execute(Cmd_obj, msg):
     xmlShaderTree = xmlExportItem(renderer)
 
     #----------- Write files
-    fileName = basestring(scene.filename).removesuffix(".lxo")
-    
     #----------- as Json
     writeJson(fileName, jsonShaderTree)
 
@@ -434,19 +438,6 @@ def export_basic_execute(Cmd_obj, msg):
     
     #----------- as usda
     writeUsda(fileName, xmlShaderTree)
-    
-    #----------- consolidate scene
-    if consolidateScene == True:
-        videoStillFileList = xmlShaderTree.findall(".//videoStill/channels/filename")
-        fileList = []
-        for e in videoStillFileList:
-            filename = e.get("value")
-            fileList.append(filename)
-    
-        suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
-        projectPath = basestring(fileName).removesuffix(suffix)
-        destinationPath = projectPath + "exported_textures"
-        copy_and_clean_files(fileList, destinationPath)
 
 # Write the data as XML
 def writeXml(fileName, xml:ET.Element):
@@ -465,7 +456,11 @@ def writeUsda(filename:str, xml:ET.Element):
     usdExportShaderTree(stage, "/shadertree", context, xml)
     
     stage.GetRootLayer().Save()
-    print("... usd saved")
+    print("✅ USD saved")
+    #----------- consolidate scene
+    if consolidateScene:
+        copy_and_clean_files()
+        print("✅ Scene consolidated")
 
 # Write the data as JSON
 def writeJson(filename, dictionary):
@@ -905,9 +900,8 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     # advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
     # previewShader:UsdShade.Shader = context.previewShader
     materialPath = material.GetPath()
-    #---------------------------------------------------- Create the texture locator
-    textureTransformOutput = createTextureLocator(stage, materialPath, xml)
     
+    #---------------------------------------------------- Create the texture locator
     texturePath:Path = materialPath.AppendPath(cleanName(xml.get('name')))
     invert = int(xml.find("channels/invert").get('value'))
     srcLow = float(xml.find('channels/min').get('value'))
@@ -919,23 +913,32 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
 
     #---------------------------------------------------- Define by projection type
     projType = xml.find('txtrLocator/channels/projType').get('value')
-    print("projection type = %s" % projType)
     
     #---------------------------------------------------- Create the texture transform
+    textureFilePath = xml.find('videoStill/channels/filename').get('value')
+    
+    if consolidateScene :
+        file_name = os.path.basename(textureFilePath)
+        textureFilePath = os.path.join(consolidatePath, file_name)
+        
+        if (textureFilePath not in textureList):
+            textureList[textureFilePath] = textureFilePath
+    
     textureTransformOutput:UsdShade.Output
+    
     match projType:
         case "uv":
             textureTransformOutput = createUVTextureLocator(stage, materialPath, xml)
             #---------------------------------------------------- Create the UV texture
             texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
             texture.CreateIdAttr('ND_image' + getNodeTypePrefix(outType))
-            texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
+            texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
             texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
             texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
             texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformOutput)
             textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
             
-        case "triplanar" | "solid":
+        case "triplanar":
             textureTransformOutput:UsdShade.Output = create3DTextureLocator(stage, materialPath, xml)
             #---------------------------------------------------- Create the geometry normal node
             geometryNormal:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_geoNormal")
@@ -947,9 +950,9 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
             blendApprox = math.pi / (4 * math.sin(blend * math.pi / 4))
             texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_triplanarTexture")
             texture.CreateIdAttr('ND_triplanarprojection' + getNodeTypePrefix(outType))
-            texture.CreateInput('filex', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
-            texture.CreateInput('filey', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
-            texture.CreateInput('filez', Sdf.ValueTypeNames.Asset).Set(xml.find('videoStill/channels/filename').get('value'))
+            texture.CreateInput('filex', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
+            texture.CreateInput('filey', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
+            texture.CreateInput('filez', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
             texture.CreateInput('normal', Sdf.ValueTypeNames.Vector3f).ConnectToSource(geometryNormalOut)
             texture.CreateInput('upaxis', Sdf.ValueTypeNames.Int).Set(1)
             texture.CreateInput('blend', Sdf.ValueTypeNames.Float).Set(blendApprox)
@@ -988,30 +991,6 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     textureBrightness.CreateInput('in2', outType).ConnectToSource(textureAdjustNodeGraph.GetInput('brightness'))
     adjustedTextureOutput:UsdShade.Output = textureBrightness.CreateOutput('out', outType)
     
-
-    # def Shader "mtlxadd1"
-    # {
-    #     uniform token info:id = "ND_add_color3"
-    #     color3f inputs:in1.connect = </shadertree/Shaderball_Material/rainbowh_Image_adjust/mtlxcontrast1.outputs:out>
-    #     color3f inputs:in2 = (1, 1, 1)
-    #     color3f outputs:out
-    # }
-
-    # def Shader "mtlxcontrast1"
-    # {
-    #     uniform token info:id = "ND_contrast_color3"
-    #     color3f inputs:amount = (2, 2, 2)
-    #     color3f inputs:in.connect = </shadertree/Shaderball_Material/rainbowh_Image_adjust/valueRange.outputs:out>
-    #     color3f outputs:out
-    # }
-            
-    # --------------------------------------------------- Invert
-    if invert == 1:
-        invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/invert")
-        invertShader.CreateIdAttr('ND_invert' + getNodeTypePrefix(outType))
-        invertShader.CreateInput("in", outType).ConnectToSource(adjustedTextureOutput)
-        adjustedTextureOutput:UsdShade.Output = invertShader.CreateOutput('out', outType)
-    
     # --------------------------------------------------- Alpha mode
     alphaMode = xml.find('channels/alpha').get('value')
     if alphaMode == "only":
@@ -1019,6 +998,13 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
         extractChannelShader.CreateIdAttr("ND_separate4_color4")
         extractChannelShader.CreateInput("in", Sdf.ValueTypeNames.Color4f).ConnectToSource(adjustedTextureOutput)
         adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outa', Sdf.ValueTypeNames.Float)
+            
+    # --------------------------------------------------- Invert
+    if invert == 1:
+        invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/invert")
+        invertShader.CreateIdAttr('ND_invert' + getNodeTypePrefix(outType))
+        invertShader.CreateInput("in", outType).ConnectToSource(adjustedTextureOutput)
+        adjustedTextureOutput:UsdShade.Output = invertShader.CreateOutput('out', outType)
     
     # --------------------------------------------------- Extract swizzling channel
     if swizzling:
@@ -1060,34 +1046,18 @@ def getNodeTypePrefix(outType):
             
         case Sdf.ValueTypeNames.Color4f:
             return "_color4"
-    
-
-def createTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
-    #---------------------------------------------------- Define by projection type
-    projType = xml.find('txtrLocator/channels/projType').get('value')
-    print("projection type = %s" % projType)
-    
-    #---------------------------------------------------- Create the texture transform
-    textureTransformOutput:UsdShade.Output
-    match projType:
-        case "uv":
-            textureTransformOutput = createUVTextureLocator(stage, path, xml)
-            
-        case "triplanar" | "solid":
-            textureTransformOutput:UsdShade.Output = create3DTextureLocator(stage, path, xml)
-    
-    return textureTransformOutput
 
 def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
     #---------------------------------------------------- Create the texture reader
-    # stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
-    # stReader.CreateIdAttr('ND_texcoord_vector2')
-    # stReader.CreateInput('index', Sdf.ValueTypeNames.Int).Set(0)
-    # stOutput:UsdShade.Output = stReader.CreateOutput('out', Sdf.ValueTypeNames.TexCoord2f)
+    stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
+    stReader.CreateIdAttr('ND_texcoord_vector2')
+    stReader.CreateInput('index', Sdf.ValueTypeNames.Int).Set(0)
+    stOutput:UsdShade.Output = stReader.CreateOutput('out', Sdf.ValueTypeNames.TexCoord2f)
     
     #---------------------------------------------------- Create the uv coordinates
     uvTransform = UsdShade.Shader.Define(stage, str(path) + "_texture_transform")
     uvTransform.CreateIdAttr('UsdTransform2d')
+    uvTransform.CreateInput('in', Sdf.ValueTypeNames.TexCoord2f).ConnectToSource(stOutput)
     uvTransform.CreateInput('scale', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/wrapU').get('value')),float(xml.find('txtrLocator/channels/wrapV').get('value'))))
     uvTransform.CreateInput('translation', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/m02').get('value')),float(xml.find('txtrLocator/channels/m12').get('value'))))
     uvTransform.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(360 * float(xml.find('txtrLocator/channels/uvRotation').get('value')) / (2 * math.pi))
@@ -1357,47 +1327,52 @@ def isFiltered(chName:str, itemType:str=None):
     #---------------------------------------------- Ignore everything else
     return False
 
-def copy_and_clean_files(fileList, destinationPath): #----- Chat GPT code there
+def copy_and_clean_files():
     # Créer le dossier destination s'il n'existe pas
-    if not os.path.exists(destinationPath):
-        os.makedirs(destinationPath)
+    if not os.path.exists(consolidatePath):
+        os.makedirs(consolidatePath)
 
-    # Liste des fichiers présents dans destinationPath
-    existing_files = {f: os.path.join(destinationPath, f) for f in os.listdir(destinationPath)}
+    # Liste des fichiers présents dans consolidatePath
+    existing_files = [f for f in os.listdir(consolidatePath) if os.path.isfile(os.path.join(consolidatePath, f))]
     
     # Copier les fichiers en vérifiant leur date de modification
-    for file in fileList:
-        if os.path.exists(file):  # Vérifie que le fichier source existe
-            file_name = os.path.basename(file)
-            dest_file = os.path.join(destinationPath, file_name)
-
-            # Vérifier si le fichier existe déjà et comparer les dates
-            if os.path.exists(dest_file):
-                src_mtime = os.path.getmtime(file)
-                dest_mtime = os.path.getmtime(dest_file)
-
-                if src_mtime > dest_mtime:  # Si le fichier source est plus récent
-                    shutil.copy2(file, dest_file)
-                    print(f"📂 Fichier mis à jour : {file_name}")
-            else:
-                shutil.copy2(file, dest_file)
-                print(f"✅ Fichier copié : {file_name}")
+    for filePath in textureList:
+        originalPath = filePath
+        newPath = textureList[filePath]
+        
+        # Vérifier si le fichier existe déjà et comparer les dates
+        fileName = os.path.basename(filePath)
+        if (fileName in existing_files):
+            src_mtime = os.path.getmtime(originalPath)
+            dest_mtime = os.path.getmtime(newPath)
+            
+            if src_mtime > dest_mtime:  # Si le fichier source est plus récent
+                shutil.copy2(originalPath, newPath)
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture mis : {newPath} à jour")
 
             # Supprimer ce fichier de la liste des fichiers existants
-            existing_files.pop(file_name, None)
+            existing_files.pop(existing_files.index(fileName))
+            
+        else:
+            shutil.copy2(originalPath, newPath)
+            if (verbose and verboseConsolidate):print(f"🖼️  texture : {newPath} copiée")
 
     # Déplace les fichiers inutilisés si besoin
     if len(existing_files) > 0:
         # Dossier "unused" pour les fichiers obsolètes
-        unusedPath = os.path.join(destinationPath, "unused")
+        unusedPath = os.path.join(consolidatePath, "unused")
         if not os.path.exists(unusedPath):
             os.makedirs(unusedPath)
             
         # Déplacer les fichiers non présents dans fileList vers "unused"
-        for old_file in existing_files.values():
+        for old_file in existing_files:
             unused_file = os.path.join(unusedPath, os.path.basename(old_file))
-            shutil.move(old_file, unusedPath)
-            print(f"📦 Fichier déplacé dans 'unused' : {old_file}")
+            if not os.path.exists(unused_file):
+                shutil.move(os.path.join(consolidatePath, old_file), unused_file)
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} déplacé dans 'unused'")
+            else:
+                os.remove(os.path.join(consolidatePath, old_file))
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} supprimé, déjà présent dans 'unused'")
 
 # Clean the shadertree layers names (remove white space and parenthesis)
 def cleanName(name:str) -> str:
