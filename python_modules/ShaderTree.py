@@ -20,14 +20,25 @@ try:
 except ImportError:
     import xml.etree.ElementTree as ET
     
-parser = ET.XMLParser(encoding='Unicode')
-    
+# Fix Python 3 issues
 if sys.version_info[0] == 3:
     xrange = range
     basestring = str
     long = int
 
 class ShadingContext:
+    """
+    A class representing a shading context in a USD environment.
+
+    Attributes:
+        material (UsdShade.Material): The material associated with the shading context.
+        shader (UsdShade.Shader): The primary shader used in the shading context.
+        previewShader (UsdShade.Shader): The shader used for preview purposes.
+        path (str): The path to the shading context.
+        parentPath (str): The path to the parent of the shading context.
+        advancedMaterialChannels (ET.Element): XML element representing advanced material channels.
+    """
+    
     material: UsdShade.Material = None
     shader: UsdShade.Shader = None
     previewShader: UsdShade.Shader = None
@@ -65,14 +76,26 @@ verboseConsolidate = True
 
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
+    """
+    Exports the current modo scene's shader tree to JSON, XML, and USDA formats.
 
+    This function retrieves the current modo scene, extracts the shader tree
+    associated with the primary renderer, and exports it in three different formats:
+    JSON, XML, and USDA. The exported files are saved with the same base name as
+    the scene file, but with different extensions based on the format.
+
+    Parameters:
+        Cmd_obj: The command object, not used in this function.
+        msg: The message object, not used in this function.
+    """
+    
     scene = modo.scene.current()
     fileName = basestring(scene.filename).removesuffix(".lxo")
 
     rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(rendererId)
     
-    jsonShaderTree = exportItem(renderer)
+    jsonShaderTree = jsonExportItem(renderer)
     
     xmlShaderTree = xmlExportItem(renderer)
 
@@ -104,6 +127,7 @@ def writeUsda(filename:str, xml:ET.Element):
     
     stage.GetRootLayer().Save()
     print("✅ USD saved")
+    
     #----------- consolidate scene
     if consolidateScene:
         copy_and_clean_files()
@@ -175,6 +199,22 @@ def xmlExportItem(item:modo.Item):
 
 # Grab all channels of an items and write it as separate xml elements in a channels structure
 def xmlGetChannels(item:modo.Item):
+    """
+    Generate an XML representation of the channels of a given modo item.
+
+    This function creates an XML element containing the channels of the specified
+    modo item. It retrieves the channels using the `getChannels` function and
+    formats them into XML elements. Each channel is represented as an XML element
+    with its attributes, and if a channel is stored as a dictionary, it creates
+    a nested XML structure to represent the dictionary's contents.
+
+    Parameters:
+        item (modo.Item): The modo item whose channels are to be exported to XML.
+
+    Returns:
+        xml.etree.ElementTree.Element: An XML element representing the channels of
+        the modo item.
+    """
     xml_out = ET.Element('channels')
     
     #------------------------------- Export channels
@@ -201,7 +241,23 @@ def xmlGetChannels(item:modo.Item):
     return xml_out
 
 # Recursively convert the shader tree structure to a Dict struccture (for json exoport)
-def exportItem(item:modo.Item):
+def jsonExportItem(item:modo.Item):
+    """
+    Exports a modo item and its hierarchy to a JSON-compatible dictionary.
+
+    This function recursively processes a modo item, extracting its name, ID, 
+    type, and channels, and organizes this information into an OrderedDict. 
+    If the item has child items, they are also processed and included in the 
+    dictionary under their respective names.
+
+    Args:
+        item (modo.Item): The modo item to be exported.
+
+    Returns:
+        OrderedDict: A dictionary containing the item's details and its 
+        children's details, suitable for JSON serialization.
+    """
+    
     out_dict = OrderedDict()
     out_dict['name'] = item.name
     out_dict['id'] = item.id
@@ -214,12 +270,30 @@ def exportItem(item:modo.Item):
     #------------------------------- Export childs
     for i in range(item.childCount()):
         itemChild = item.childAtIndex(i)
-        out_dict[itemChild.name] = exportItem(itemChild)
+        out_dict[itemChild.name] = jsonExportItem(itemChild)
         
     return out_dict
 
 # Grab all channels of an item and write it as separate Dict
 def getChannels(item:modo.Item):
+    """
+    Retrieve and format the channels of a given modo item.
+
+    This function iterates over the channels of the specified modo item,
+    formats each channel using the `formatChannel` function, and stores
+    the results in an ordered dictionary. If `preFilterChannels` is set
+    to True, only channels that match the filters for the item's type
+    are included. The resulting dictionary is sorted alphabetically by
+    channel name before being returned.
+
+    Parameters:
+        item (modo.Item): The modo item whose channels are to be retrieved.
+
+    Returns:
+        OrderedDict: An ordered dictionary of formatted channels, sorted
+        alphabetically by channel name.
+    """
+    
     d_channels = OrderedDict()
 
     mChan:modo.Channel
@@ -238,7 +312,20 @@ def getChannels(item:modo.Item):
 
 # Format a channel to the right type (lots of weird stuff here, personnal cooking !)
 def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
+    """
+    Formats a modo.Channel object into a dictionary containing its properties.
 
+    Parameters:
+        channel (modo.Channel): The channel to be formatted.
+        ctype (int): The channel type identifier.
+        evalType (str): The evaluation type of the channel.
+        storageType (str): The storage type of the channel.
+
+    Returns:
+        dict: A dictionary containing the channel's value, type, evaltype, and storageType.
+        If any attribute is missing or an error occurs, appropriate error messages are included.
+    """
+    
     if (ctype == None) : ctype = "NONE"
     if (evalType == None) : evalType = "NONE"
     if (storageType == None) : storageType = "NONE"
@@ -746,51 +833,6 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     
     return textureAdjustNodeGraph.GetOutput('out')
 
-def floatToOutType(value:float, outType:Sdf.ValueTypeNames):
-    """
-    Convert a float value to a specified Sdf.ValueTypeNames type.
-
-    Parameters:
-        value (float): The float value to be converted.
-        outType (Sdf.ValueTypeNames): The target type for conversion.
-
-    Returns:
-        Union[float, Tuple[float, float, float], Tuple[float, float, float, float]]:
-        - Returns the original float if the target type is Float or Double.
-        - Returns a tuple of three identical float values if the target type is Color3f or Vector3f.
-        - Returns a tuple of three identical float values with an additional 1.0 if the target type is Color4f.
-    """
-    match outType:
-        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
-            return value
-            
-        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
-            return (value, value, value)
-            
-        case Sdf.ValueTypeNames.Color4f:
-            return (value, value, value, 1.0)
-
-def getNodeTypePrefix(outType):
-    """
-    Determine the prefix for a node type based on the output type.
-
-    Parameters:
-        outType (Sdf.ValueTypeName): The output type to evaluate.
-
-    Returns:
-        str: A string prefix corresponding to the node type, such as "_float", "_color3", or "_color4".
-    """
-    
-    match outType:
-        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
-            return "_float"
-            
-        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
-            return "_color3"
-            
-        case Sdf.ValueTypeNames.Color4f:
-            return "_color4"
-
 def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
     """
     Create a UV texture locator on the given USD stage.
@@ -1020,7 +1062,18 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
 
 # Format any channel value to given type
 def formatChannelValue(channel:modo.Channel): 
-    #return(value)
+    """
+    Formats the value of a modo.Channel object based on its type.
+
+    Parameters:
+        channel (modo.Channel): The channel whose value needs to be formatted.
+
+    Returns:
+        str or dict: A string representation of the channel's value for integer,
+        float, and eval types. For gradient type, returns "gradient". For storage
+        types, returns a dictionary with matrix details if the storage type is
+        MATRIX4, or a string representation otherwise. Returns "None" for none type.
+    """
     match channel.type:
         case lx.symbol.iCHANTYPE_INTEGER:
             return str(channel.get())
@@ -1134,6 +1187,51 @@ def isFiltered(chName:str, itemType:str=None):
     
     #---------------------------------------------- Ignore everything else
     return False
+
+def floatToOutType(value:float, outType:Sdf.ValueTypeNames):
+    """
+    Convert a float value to a specified Sdf.ValueTypeNames type.
+
+    Parameters:
+        value (float): The float value to be converted.
+        outType (Sdf.ValueTypeNames): The target type for conversion.
+
+    Returns:
+        Union[float, Tuple[float, float, float], Tuple[float, float, float, float]]:
+        - Returns the original float if the target type is Float or Double.
+        - Returns a tuple of three identical float values if the target type is Color3f or Vector3f.
+        - Returns a tuple of three identical float values with an additional 1.0 if the target type is Color4f.
+    """
+    match outType:
+        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
+            return value
+            
+        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
+            return (value, value, value)
+            
+        case Sdf.ValueTypeNames.Color4f:
+            return (value, value, value, 1.0)
+
+def getNodeTypePrefix(outType):
+    """
+    Determine the prefix for a node type based on the output type.
+
+    Parameters:
+        outType (Sdf.ValueTypeName): The output type to evaluate.
+
+    Returns:
+        str: A string prefix corresponding to the node type, such as "_float", "_color3", or "_color4".
+    """
+    
+    match outType:
+        case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
+            return "_float"
+            
+        case Sdf.ValueTypeNames.Color3f | Sdf.ValueTypeNames.Vector3f:
+            return "_color3"
+            
+        case Sdf.ValueTypeNames.Color4f:
+            return "_color4"
 
 def copy_and_clean_files():
     """
