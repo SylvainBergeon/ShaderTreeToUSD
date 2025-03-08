@@ -412,16 +412,14 @@ stdMatChannelMap[lx.symbol.sITYPE_CONSTANT] = {}
 stdMatChannelMap[lx.symbol.sITYPE_DEFAULTSHADER] = {}
 stdMatChannelMap[lx.symbol.sITYPE_RENDEROUTPUT] = {}
 
-scene = modo.scene.current()
-fileName = basestring(scene.filename).removesuffix(".lxo")
-suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
-projectPath = basestring(fileName).removesuffix(suffix)
-consolidatePath = projectPath + suffix + "_textures"
 textureList = dict()
 
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
     
+    scene = modo.scene.current()
+    fileName = basestring(scene.filename).removesuffix(".lxo")
+
     rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(rendererId)
     
@@ -470,6 +468,23 @@ def writeJson(filename, dictionary):
 
 # Recursively convert the shader tree structure to xml
 def xmlExportItem(item:modo.Item):
+    """
+    Exports a modo item and its hierarchy to an XML element.
+
+    This function creates an XML representation of a modo item, including its
+    channels and child items. It handles specific item types by exporting
+    additional dependencies linked through the item graph. The item's name is
+    sanitized using `replace_chars` and `cleanName` functions to ensure valid
+    XML attribute values.
+
+    Parameters:
+        item (modo.Item): The modo item to be exported to XML.
+
+    Returns:
+        xml.etree.ElementTree.Element: An XML element representing the modo item
+        and its hierarchy.
+    """
+    
     out_xml = ET.Element(item.type)
     #out_xml.set('name',str(item.name).replace(" ", "_").replace("(", "").replace(")", ""))
     out_xml.set('name', replace_chars(str(item.name), ["(", ")", " "], "_"))
@@ -615,8 +630,28 @@ def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str
     
     return chan
 
-# Recursive shader tree parsing
 def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
+    """
+    Recursively explores and exports a shader tree to a USD stage.
+
+    This function traverses an XML representation of a shader tree, creating
+    corresponding USD nodes on the given stage. It handles different shader
+    elements such as 'polyRender', 'mask', 'imageMap', 'noise', and
+    'advancedMaterial', creating appropriate USD structures and connections
+    based on the element type and its attributes.
+
+    Args:
+        stage (Usd.Stage): The USD stage where the shader tree will be exported.
+        path (str): The base path for the shader tree in the USD stage.
+        context (ShadingContext): The current shading context, which is updated
+            as the tree is traversed.
+        xml (ET.Element): The XML element representing the current node in the
+            shader tree.
+
+    Returns:
+        ShadingContext: The updated shading context after processing the shader
+        tree.
+    """
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
     
@@ -731,6 +766,23 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
 
 # Create USD shader for advanced material layer
 def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
+    """
+    Create a USD shader from an XML element and add it to a given stage and material.
+
+    This function defines a shader on the specified USD stage using the path derived
+    from the material and XML element. It configures the shader based on whether it
+    is a preview or not, setting attributes and creating inputs from the XML channels.
+    The shader is then connected to the material's output.
+
+    Parameters:
+        stage (Usd.Stage): The USD stage where the shader will be defined.
+        material (UsdShade.Material): The material to which the shader will be connected.
+        xml (ET.Element): An XML element containing shader channel data.
+        isPreview (bool): Flag indicating if the shader is a preview shader.
+
+    Returns:
+        UsdShade.Shader: The created USD shader.
+    """
     
     path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
     
@@ -776,7 +828,26 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
 
 # Apply overrides when things are specific to how the shaderTree works (multiple options due to legacy and updates)
 def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> str|None: 
-    
+    """
+Apply overrides to a given USD value based on the BRDF type and Modo input name.
+
+This function modifies the USD value according to specific rules defined for
+different BRDF types ('gtr' and 'principled') and Modo input names. It uses
+values from an XML element to determine the necessary transformations.
+
+Parameters:
+    usdValue (str): The original USD value to be potentially overridden.
+    brdfType (str): The type of BRDF ('gtr' or 'principled') to determine the
+                    override logic.
+    modoInputName (str): The name of the Modo input channel to apply the
+                         override to.
+    xml (ET.Element): An XML element containing channel data used for
+                      determining overrides.
+
+Returns:
+    str | None: The overridden USD value if changes were made, otherwise the
+                original value.
+"""
     #---------------------------------------------------- Get useRefIdx value for remapping
     useRefIdx = (xml.find('channels/useRefIdx').get('value')=="1")
     specRefIdx = (xml.find('channels/specRefIdx').get('value')=="1")
@@ -918,11 +989,12 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     textureFilePath = xml.find('videoStill/channels/filename').get('value')
     
     if consolidateScene :
+        consolidatePath = getConsolidatedPath()
         file_name = os.path.basename(textureFilePath)
-        textureFilePath = os.path.join(consolidatePath, file_name)
+        consolidatedTextureFilePath = os.path.join(consolidatePath, file_name)
         
         if (textureFilePath not in textureList):
-            textureList[textureFilePath] = textureFilePath
+            textureList[textureFilePath] = consolidatedTextureFilePath
     
     textureTransformOutput:UsdShade.Output
     
@@ -1328,12 +1400,30 @@ def isFiltered(chName:str, itemType:str=None):
     return False
 
 def copy_and_clean_files():
+    """
+    Copies and cleans texture files in the consolidated path.
+
+    This function creates a destination directory if it doesn't exist,
+    lists existing files in the directory, and copies new or updated
+    texture files from the `textureList` dictionary. It compares the
+    modification dates of existing files to determine if they need
+    updating. Unused files are moved to an 'unused' subdirectory or
+    deleted if they already exist there. Verbose logging is provided
+    based on the `verbose` and `verboseConsolidate` flags.
+    """
+    
+    consolidatePath = getConsolidatedPath()
+
     # Créer le dossier destination s'il n'existe pas
     if not os.path.exists(consolidatePath):
         os.makedirs(consolidatePath)
 
     # Liste des fichiers présents dans consolidatePath
-    existing_files = [f for f in os.listdir(consolidatePath) if os.path.isfile(os.path.join(consolidatePath, f))]
+    existing_files = []
+    for f in os.listdir(consolidatePath):
+        fPath = os.path.join(consolidatePath, f)
+        if os.path.isfile(fPath):
+            existing_files.append(fPath)
     
     # Copier les fichiers en vérifiant leur date de modification
     for filePath in textureList:
@@ -1341,17 +1431,16 @@ def copy_and_clean_files():
         newPath = textureList[filePath]
         
         # Vérifier si le fichier existe déjà et comparer les dates
-        fileName = os.path.basename(filePath)
-        if (fileName in existing_files):
+        if (filePath in existing_files):
             src_mtime = os.path.getmtime(originalPath)
             dest_mtime = os.path.getmtime(newPath)
             
             if src_mtime > dest_mtime:  # Si le fichier source est plus récent
                 shutil.copy2(originalPath, newPath)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture mis : {newPath} à jour")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {newPath} mise à jour")
 
             # Supprimer ce fichier de la liste des fichiers existants
-            existing_files.pop(existing_files.index(fileName))
+            existing_files.pop(existing_files.index(filePath))
             
         else:
             shutil.copy2(originalPath, newPath)
@@ -1369,10 +1458,10 @@ def copy_and_clean_files():
             unused_file = os.path.join(unusedPath, os.path.basename(old_file))
             if not os.path.exists(unused_file):
                 shutil.move(os.path.join(consolidatePath, old_file), unused_file)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} déplacé dans 'unused'")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} déplacée dans 'unused'")
             else:
                 os.remove(os.path.join(consolidatePath, old_file))
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} supprimé, déjà présent dans 'unused'")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} supprimée, déjà présent dans 'unused'")
 
 # Clean the shadertree layers names (remove white space and parenthesis)
 def cleanName(name:str) -> str:
@@ -1385,6 +1474,13 @@ def remove_chars(string, chars_to_remove):
     translation_table = str.maketrans("", "", "".join(chars_to_remove))
     return string.translate(translation_table)
 
-def replace_chars(string, chars_to_remove, replacement):
-    pattern = "[" + re.escape("".join(chars_to_remove)) + "]"
+def replace_chars(string: str, chars_to_replace: str, replacement: str) -> str:
+    pattern = "[" + re.escape("".join(chars_to_replace)) + "]"
     return re.sub(pattern, replacement, string)
+
+def getConsolidatedPath() -> str:
+    scene = modo.scene.current()
+    fileName = basestring(scene.filename).removesuffix(".lxo")
+    suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
+    projectPath = basestring(fileName).removesuffix(suffix)
+    return projectPath + suffix + "_textures"

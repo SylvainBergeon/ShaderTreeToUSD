@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<form name="Export Shader Tree Options">
+    <item type="checkbox" arg="exportShadertree -verbose">
+        <label>Verbose</label>
+    </item>
+    <item type="checkbox" arg="exportShadertree -verboseSetValue">
+        <label>Verbose Set Value</label>
+    </item>
+    <item type="checkbox" arg="exportShadertree -verboseCreateShader">
+        <label>Verbose Create Shader</label>
+    </item>
+    <item type="checkbox" arg="exportShadertree -verboseOverrideValue">
+        <label>Verbose Override Value</label>
+    </item>
+    <item type="checkbox" arg="exportShadertree -verboseModifyTree">
+        <label>Verbose Modify Tree</label>
+    </item>
+    <item type="checkbox" arg="exportShadertree -verboseConsolidate">
+        <label>Verbose Consolidate</label>
+    </item>
+</form>
