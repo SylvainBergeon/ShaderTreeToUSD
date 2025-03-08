@@ -1,18 +1,11 @@
 # python
 
-import os
-import shutil
-import re
-import sys
-import lx
-import modo
-import json
-import math
+import os, shutil
+import re, sys, math, json
+import lx, modo
 from collections import OrderedDict
 from .ShaderFilters import filters, usdInputMap, usdTypeMap, channelTypeMap, stdMatChannelMap
-
 from pathlib import Path
-
 from pxr import Sdf, Usd, UsdShade, UsdGeom
 
 try:
