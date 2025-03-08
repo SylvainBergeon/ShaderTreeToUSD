@@ -17,8 +17,8 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
     def __init__(self):
         lxu.command.BasicCommand.__init__(self)
         self.dyna_Add('item', '&item')
-        self.basic_SetFlags(0, lx.symbol.fCMDARG_OPTIONAL)  
-
+        self.basic_SetFlags(0, lx.symbol.fCMDARG_OPTIONAL)
+        
     def cmd_Flags(self) -> int:
       return lx.symbol.fCMD_UNDO | lx.symbol.fCMD_MODEL
 
@@ -30,7 +30,8 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
         # code edited in those modules does not require a re-start of modo to run. Only changes to this module 
         # require a restart.
         reload_modules()
-
+        
+        # Call the export function with the selected options
         python_modules.ShaderTree.export_basic_execute(self, msg)
         
         msg.SetCode(lx.result.OK)

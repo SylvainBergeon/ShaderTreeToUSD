@@ -9,7 +9,7 @@ import modo
 import json
 import math
 from collections import OrderedDict
-from typing import NamedTuple
+from .ShaderFilters import filters, usdInputMap, usdTypeMap, channelTypeMap, stdMatChannelMap
 
 from pathlib import Path
 
@@ -27,6 +27,14 @@ if sys.version_info[0] == 3:
     basestring = str
     long = int
 
+class ShadingContext:
+    material: UsdShade.Material = None
+    shader: UsdShade.Shader = None
+    previewShader: UsdShade.Shader = None
+    path: str = ""
+    parentPath: str = ""
+    advancedMaterialChannels: ET.Element
+
 # preFilterChannels option allows to prefilter channels in xmlgetChannels
 # if True, only the channels that are referenced in filters will be kept
 # false is mostly intended for raw export and debug, it should be a little bit slower
@@ -39,6 +47,13 @@ consolidateScene = True
 
 # exportGlPreviewMaterial writes Gl shaders
 exportGlPreviewMaterial = False
+export_json = True
+export_xml = True
+export_usda = True
+
+# textureList is used to store the source path of any texture used by the shaders
+# in order to later consolidate the scene by copying all these textures to a consolidated folder
+textureList = dict()
 
 # Output log options
 verbose = True
@@ -48,375 +63,9 @@ verboseOverrideValue = False
 verboseModifyTree = True
 verboseConsolidate = True
 
-class ShadingContext:
-    material: UsdShade.Material = None
-    shader: UsdShade.Shader = None
-    previewShader: UsdShade.Shader = None
-    path: str = ""
-    parentPath: str = ""
-    advancedMaterialChannels: ET.Element
-
-filters = {}
-filters [lx.symbol.sITYPE_ADVANCEDMATERIAL] = [
-    "useRefIdx", # Important
-    "brdfType",  #Important
-    "specRefIdx",#boolean toggle refIndex/specAmount ?
-    "diffAmt",
-    "diffCol",
-    "specAmt",
-    "specCol",
-    "refIndex",
-    "aniso",
-    "rough",
-    "specFres",
-    "specTint",
-    "coatAmt",
-    "coatRough",
-    "radiance",
-    "luminousAmt",
-    "luminousCol",
-    "metallic",
-    "specCol",
-    "scatterAmt",
-    "disperse",
-    "tranRough",
-    "subsAmt",
-    "subsCol",
-    "subsDepth",
-    "subsDist",
-    "sheen",
-    "sheenTint",
-    "flatness",
-    "opacity",
-    "disperse",
-    "metallic",
-    "tranAmt",
-    "tranCol",
-    "tranDist",
-    "tranAmt",
-    "tranRough",
-    "normal"
-    ]
-filters[lx.symbol.sITYPE_MASK] = [
-    "blend",
-    "effect",
-    "enable",
-    "filter",
-    "invert",
-    "opacity",
-    "ptag",
-    "ptyp",
-    "render",
-    "submask"
-    ]
-filters[lx.symbol.sITYPE_IMAGEMAP] = [
-    "aa",
-    "aaVal",
-    "alpha",
-    "blend",
-    "blueInv",
-    "brightness",
-    "clamp",
-    "contrast",
-    "effect",
-    "enable",
-    "filter",
-    "gamma",
-    "greenInv",
-    "ignSclGrp",
-    "invert",
-    "max",
-    "min",
-    "minSpot",
-    "opacity",
-    "pixBlend",
-    "rawTextureAlpha",
-    "rawTextureColor",
-    "rawTextureValue",
-    "redInv",
-    "render",
-    "rgba",
-    "sourceHigh",
-    "sourceLow",
-    "swizzling",
-    "textureAlpha",
-    "textureColor",
-    "textureValue"
-    ]
-filters[lx.symbol.sITYPE_VIDEOSTILL] = [
-    "enable",
-    "blend",
-    "opacity",
-    "filename",
-    "format",
-    "udim",
-    "alphaMode",
-    "colorRange",
-    "colorspace",
-    "fps",
-    "imageStack",
-    "interlace",
-    "playback"
-    ]
-filters[lx.symbol.sITYPE_TEXTURELOC] = [
-    "projType",
-    #------------------------------------------------------ UV Projection
-    "uvMap", "useUDIM",  "uvRotation", "wrapU", "wrapV", "tileU", "tileV",
-    #------------------------------------------------------ Solid, Planar, spherical, Cylindrical ...
-    "world", "worldMatrix", "worldXfrm", "wposMatrix", "wrotMatrix", "wsclMatrix",
-    #------------------------------------------------------ Triplanar
-    "triplanarBlending", 
-    
-]
-
-filters[lx.symbol.sITYPE_DEFAULTSHADER] = []
-filters[lx.symbol.sITYPE_RENDEROUTPUT] = []
-filters[lx.symbol.sITYPE_CONSTANT] = []
-
-channelTypeMap = {
-    lx.symbol.iCHANTYPE_EVAL:       "eval",
-    lx.symbol.iCHANTYPE_FLOAT:      "float",
-    lx.symbol.iCHANTYPE_INTEGER:    "integer",
-    lx.symbol.iCHANTYPE_GRADIENT:   "gradient",
-    lx.symbol.iCHANTYPE_STORAGE:    "string",
-    lx.symbol.iCHANTYPE_NONE:       "none"
-}
-usdInputMap = {
-    "uvTile":{
-        "reset":"black",
-        "repeat":"periodic",
-        "edge":"clamp",
-        "mirror":"mirror"
-    },
-    "effect":{
-        "diffColor":"base_color",
-        "diffAmount":"base",
-        "rough":"specular_roughness",
-        "normal":"in",
-        "objectNormal":"in",
-        "bump":"normal",
-        "stencil":"in",
-        "specAmount":"specular",
-        "reflFresnel":"specular",
-        "specFresnel":"specular",
-        "tranAmount":"transmission",
-        "lumiAmount":"emission",
-        "lumiColor":"emission_color",
-        "specColor":"specular_color",
-        "metallic":"metalness",
-        "sheen":"sheen",
-        "sheenTint":"sheen_color",
-        "flatness":"sheen_roughness",
-        "displace":"displacement"
-    },
-    "effect_gl":{
-        "diffColor":"diffuseColor",
-        "lumiColor":"emissiveColor",
-        "specColor":"specularColor",
-        "metallic":"metallic",
-        "lumiAmount":"emissive",
-        "rough":"roughness",
-        "normal":"normal",
-        "displace":"displacement"
-    }
-}
-usdTypeMap = {
-    # ----------------------------------------- mtlx standard
-    "base":Sdf.ValueTypeNames.Float,
-    "base_color":Sdf.ValueTypeNames.Color3f,
-    "opacity":Sdf.ValueTypeNames.Float,
-    "metalness":Sdf.ValueTypeNames.Float,
-    "diffuse_roughness":Sdf.ValueTypeNames.Float,
-    "specular":Sdf.ValueTypeNames.Float,
-    "specular_color":Sdf.ValueTypeNames.Color3f,
-    "specular_IOR":Sdf.ValueTypeNames.Float,
-    "specular_anisotropy":Sdf.ValueTypeNames.Float,
-    "specular_roughness":Sdf.ValueTypeNames.Float,
-    "sheen":Sdf.ValueTypeNames.Float,
-    "sheen_color":Sdf.ValueTypeNames.Color3f, #----------- beware of this, original modo value (sheenTint) is Float, sheen_color override changes its type
-    "sheen_roughness":Sdf.ValueTypeNames.Float,
-    "coat":Sdf.ValueTypeNames.Float,
-    "coat_roughness":Sdf.ValueTypeNames.Float,
-    "emission":Sdf.ValueTypeNames.Float,
-    "emission_color":Sdf.ValueTypeNames.Color3f,
-    "transmission":Sdf.ValueTypeNames.Float,
-    "transmission_scatter":Sdf.ValueTypeNames.Float,
-    "transmission_dispersion":Sdf.ValueTypeNames.Float,
-    "transmission_extra_roughness":Sdf.ValueTypeNames.Float,
-    "transmission_color":Sdf.ValueTypeNames.Color3f,
-    "transmission_depth":Sdf.ValueTypeNames.Float,
-    "transmission_roughness":Sdf.ValueTypeNames.Float,
-    "subsurface":Sdf.ValueTypeNames.Float,
-    "subsurface_color":Sdf.ValueTypeNames.Color3f,
-    "subsurface_radius":Sdf.ValueTypeNames.Float,
-    "subsurface_scale":Sdf.ValueTypeNames.Float,
-    "subsurface_anisotropy":Sdf.ValueTypeNames.Float,
-    "thin_film_thickness":Sdf.ValueTypeNames.Float,
-    "thin_film_IOR":Sdf.ValueTypeNames.Float,
-    "thin_walled":Sdf.ValueTypeNames.Int,
-    "normal":Sdf.ValueTypeNames.Vector3f,
-    "in":Sdf.ValueTypeNames.Vector3f,
-    "displacement":Sdf.ValueTypeNames.Float,
-    # ----------------------------------------- glPreview
-    "diffuseColor":Sdf.ValueTypeNames.Color3f,
-    "emissive":Sdf.ValueTypeNames.Float,
-    "emissiveColor":Sdf.ValueTypeNames.Color3f,
-    "specularColor":Sdf.ValueTypeNames.Color3f,
-    "metallic":Sdf.ValueTypeNames.Float,
-    "roughness":Sdf.ValueTypeNames.Float,
-    "clearcoat":Sdf.ValueTypeNames.Float,
-    "clearcoatRoughness":Sdf.ValueTypeNames.Float,
-    "ior":Sdf.ValueTypeNames.Float,
-    "occlusion":Sdf.ValueTypeNames.Float,
-}
-
-stdMatChannelMap = {}
-stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
-    "glPreview": { #----------------------------------- Mapping used for Principled shading mode
-        #"useRefIdx":   "useSpecularWorkflow", # boolean toggle refIndex/specAmount ?
-        "specCol":      "specularColor",
-        "specTint":     "metallic",
-        
-        "diffCol":      "diffuseColor",
-        "luminousAmt":  "emissive",
-        "luminousCol":  "emissiveColor",
-        "specAmt":      "specular", # (if useRefIdx = 0: specAmt)
-        "rough":        "roughness",
-        "refIndex":     "ior", # (if useRefIdx = 1 & specRefIdx = 1):refIndex or (if useRefIdx = 1 & specRefIdx = 0):1+specAmt
-        "coatAmt":      "clearcoat",
-        "coatRough":    "clearcoatRoughness",
-        "opacity":      "opacity",
-        "stencil":      "opacityThreshold",
-        
-        "normal":         "normal",
-        "disp":         "displacement",
-        "occ":          "occlusion"
-        },
-
-    "principled": { #----------------------------------- Mapping used for Principled shading mode
-        "specRefIdx":   "", # boolean toggle refIndex/specAmount ?
-        
-        # =============================================== BASE
-        "diffAmt":      "base",
-        "diffCol":      "base_color",
-        "opacity":      "opacity",
-        "metallic":     "metalness",
-        
-        # =============================================== SPECULAR REFLECTIONS
-        "specAmt":      "specular", # (if useRefIdx = 0: specAmt)
-        "specCol":      "specular_color",
-        "refIndex":     "specular_IOR", # (if useRefIdx = 1 & specRefIdx = 1):refIndex or (if useRefIdx = 1 & specRefIdx = 0):1+specAmt
-        "aniso":        "specular_anisotropy",
-        "rough":        "specular_roughness",
-        
-        # =============================================== COAT
-        "coatAmt":      "coat",
-        "coatRough":    "coat_roughness",
-        
-        # =============================================== EMISSION
-        "luminousAmt":  "emission",
-        "luminousCol":  "emission_color",
-        
-        # =============================================== SHEEN
-        "sheen":"sheen",
-        "sheenTint":"sheen_color",
-        "flatness":"sheen_roughness",
-        
-        # =============================================== TRANSMISSION
-        "tranAmt":      "transmission",
-        "scatterAmt":   "transmission_scatter",
-        "disperse":     "transmission_dispersion",
-        "tranRough":    "transmission_extra_roughness",
-        "tranCol":      "transmission_color",
-        "tranDist":     "transmission_depth",
-        "tranRough":    "transmission_roughness",
-        "stencil":      "opacity",
-        
-        # =============================================== SSS
-        "subsAmt":      "subsurface",
-        "subsCol":      "subsurface_color",
-        "subsDepth":    "subsurface_radius",
-        "subsDist":     "subsurface_scale",
-        # # =============================================== surface
-        "normal":       "normal",
-        "disp":         "displacement"
-        },
-    
-    "gtr": { #----------------------------------- Mapping used for PBR shading mode
-        "opacity":      "opacity",
-        # =============================================== BASE
-        "diffAmt":      "base",
-        "diffCol":      "base_color",
-        #"diffRough":    "diffuse_roughness", (diffRough is not available in modo pbr, only in modo energy conserving)
-        #"metallic":     "metalness", (metallic is not supported in Modo PBR but is in mtlxStandardSurface !!)
-        # =============================================== SPECULAR REFLECTIONS
-        "specAmt":      "specular",
-        "specCol":      "specular_color",
-        "rough":        "specular_roughness",
-        "refIndex":     "specular_IOR",
-        "aniso":        "specular_anisotropy",
-        #"aniso":        "specular_rotation", (specular rotation only exist in modo pbr through uv map ?)
-        #"specTint":     "", (specTint is not available in modo pbr)
-        
-        # =============================================== COAT
-        "coatAmt":      "coat",
-        "coatRough":    "coat_roughness",
-        
-        # # =============================================== TRANSMISSION
-        "tranAmt":      "transmission",
-        "tranCol":      "transmission_color",
-        "tranDist":     "transmission_depth",
-        "scatterAmt":   "transmission_scatter",
-        "disperse":     "transmission_dispersion",
-        "tranRough":    "transmission_extra_roughness",
-        "stencil":      "opacity",
-        
-        # # =============================================== EMISSION
-        "radiance":     "emission",
-        "luminousCol":  "emission_color",
-        
-        # # =============================================== SSS
-        "subsAmt":      "subsurface",
-        "subsCol":      "subsurface_color",
-        "subsDepth":    "subsurface_radius",
-        "subsDist":     "subsurface_scale",
-        
-        # # =============================================== surface
-        "normal":       "normal",
-        "disp":         "displacement",
-        }
-    }
-stdMatChannelMap[lx.symbol.sITYPE_MASK] = {
-    "blend":        "",
-    "effect":       "",
-    "enable":       "",
-    "filter":       "",
-    "invert":       "",
-    "opacity":      "",
-    "ptag":         "",
-    "ptyp":         "",
-    "render":       "",
-    "submask":      ""
-    }
-stdMatChannelMap[lx.symbol.sITYPE_TEXTURELOC] = {
-    "uvMap":        "",
-    "useUDIM":      "",
-    "uvRotation":   "",
-    "wrapU":        "",
-    "wrapV":        "",
-    "tileU":        "Wraps",
-    "tileV":        "Wrapt"
-}
-
-stdMatChannelMap[lx.symbol.sITYPE_CONSTANT] = {}
-stdMatChannelMap[lx.symbol.sITYPE_DEFAULTSHADER] = {}
-stdMatChannelMap[lx.symbol.sITYPE_RENDEROUTPUT] = {}
-
-textureList = dict()
-
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
-    
+
     scene = modo.scene.current()
     fileName = basestring(scene.filename).removesuffix(".lxo")
 
@@ -429,13 +78,13 @@ def export_basic_execute(Cmd_obj, msg):
 
     #----------- Write files
     #----------- as Json
-    writeJson(fileName, jsonShaderTree)
+    if export_json: writeJson(fileName, jsonShaderTree)
 
     #----------- as XML
-    writeXml(fileName, xmlShaderTree)
+    if export_xml: writeXml(fileName, xmlShaderTree)
     
     #----------- as usda
-    writeUsda(fileName, xmlShaderTree)
+    if export_usda: writeUsda(fileName, xmlShaderTree)
 
 # Write the data as XML
 def writeXml(fileName, xml:ET.Element):
@@ -1098,6 +747,19 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     return textureAdjustNodeGraph.GetOutput('out')
 
 def floatToOutType(value:float, outType:Sdf.ValueTypeNames):
+    """
+    Convert a float value to a specified Sdf.ValueTypeNames type.
+
+    Parameters:
+        value (float): The float value to be converted.
+        outType (Sdf.ValueTypeNames): The target type for conversion.
+
+    Returns:
+        Union[float, Tuple[float, float, float], Tuple[float, float, float, float]]:
+        - Returns the original float if the target type is Float or Double.
+        - Returns a tuple of three identical float values if the target type is Color3f or Vector3f.
+        - Returns a tuple of three identical float values with an additional 1.0 if the target type is Color4f.
+    """
     match outType:
         case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
             return value
@@ -1109,6 +771,16 @@ def floatToOutType(value:float, outType:Sdf.ValueTypeNames):
             return (value, value, value, 1.0)
 
 def getNodeTypePrefix(outType):
+    """
+    Determine the prefix for a node type based on the output type.
+
+    Parameters:
+        outType (Sdf.ValueTypeName): The output type to evaluate.
+
+    Returns:
+        str: A string prefix corresponding to the node type, such as "_float", "_color3", or "_color4".
+    """
+    
     match outType:
         case Sdf.ValueTypeNames.Float | Sdf.ValueTypeNames.Double:
             return "_float"
@@ -1120,6 +792,22 @@ def getNodeTypePrefix(outType):
             return "_color4"
 
 def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+    """
+    Create a UV texture locator on the given USD stage.
+
+    This function defines a texture reader and a UV coordinate transformer
+    shader on the specified USD stage. It uses XML data to set the scale,
+    translation, and rotation inputs for the UV transformation. The function
+    returns the output of the UV transformation shader.
+
+    Parameters:
+        stage (Usd.Stage): The USD stage where the shaders will be defined.
+        path (Path): The path used to name the shaders.
+        xml (ET.Element): XML element containing texture locator data.
+
+    Returns:
+        UsdShade.Output: The output of the UV transformation shader.
+    """
     #---------------------------------------------------- Create the texture reader
     stReader = UsdShade.Shader.Define(stage, str(path) + "_texture_reader")
     stReader.CreateIdAttr('ND_texcoord_vector2')
@@ -1138,6 +826,21 @@ def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdSha
     return textureTransformOutput
 
 def create3DTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+    """
+    Creates a 3D texture locator within a USD stage at the specified path using
+    data from an XML element. This function constructs a node graph to handle
+    3D textures, defining inputs for space, scale, position, rotation, and axis,
+    and outputs a transformed texture locator. The function returns the final
+    output of the texture transformation.
+
+    Parameters:
+        stage (Usd.Stage): The USD stage where the node graph will be defined.
+        path (Path): The path where the node graph will be appended.
+        xml (ET.Element): The XML element containing texture locator data.
+
+    Returns:
+        UsdShade.Output: The output of the texture transformation node graph.
+    """
     # this implements a basic node structure to allow for 3d textures,
     # but the lack of documentation and the complexity of the modo coordinate system makes it weird
     # maybe someone here can help sort this out
@@ -1190,7 +893,24 @@ def create3DTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdSha
     
 # Connect a texture to the relevant shader
 def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, xml:ET.Element) -> UsdShade.Input:
-    
+    """
+    Connects a texture output to a shader input based on the specified effect name.
+
+    This function handles different effects such as "stencil", "bump", "normal", 
+    and "displace" by creating and connecting appropriate shaders and inputs 
+    within a USD stage. It utilizes the context and XML data to determine 
+    the connections and shader configurations.
+
+    Parameters:
+        stage (Usd.Stage): The USD stage where the shader and connections are defined.
+        context (ShadingContext): The shading context containing material and shader information.
+        effectName (str): The name of the effect to be applied.
+        output (UsdShade.Output): The output to be connected to the shader input.
+        xml (ET.Element): XML element containing additional configuration data.
+
+    Returns:
+        UsdShade.Input: The connected shader input, or None if the effect is not found.
+    """
     material:UsdShade.Material = context.material
     shader:UsdShade.Shader = context.shader
     advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
@@ -1381,6 +1101,22 @@ def getMappedChannel(chName:str, itemType:str=None, brdfType:str = None)->str:
 # some channels are just ignored to make files lighter. Some channels are really not relevant for
 # export but unfiltered outputs are usefull for debugging and figuring what the shaderTree has to offer)
 def isFiltered(chName:str, itemType:str=None):
+    """
+    Determine if a channel is filtered based on its name and item type.
+
+    This function checks if a given channel name is included in the filter
+    list for a specified item type. If no item type is provided, it returns
+    True by default. If the item type is not present in the filters, or if
+    the filter list for the item type is empty, it returns False. Otherwise,
+    it checks if the channel name (before the dot) is in the filter list.
+
+    Parameters:
+        chName (str): The name of the channel to check.
+        itemType (str, optional): The type of item to check against the filters.
+
+    Returns:
+        bool: True if the channel is filtered, False otherwise.
+    """
     #---------------------------------------------- if no itemType specified, return everything
     if itemType == None:
         return True
