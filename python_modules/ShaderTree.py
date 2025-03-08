@@ -95,12 +95,11 @@ def export_basic_execute(Cmd_obj, msg):
     rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(rendererId)
     
-    jsonShaderTree = jsonExportItem(renderer)
-    
     xmlShaderTree = xmlExportItem(renderer)
 
     #----------- Write files
     #----------- as Json
+    jsonShaderTree = jsonExportItem(renderer)
     if export_json: writeJson(fileName, jsonShaderTree)
 
     #----------- as XML
