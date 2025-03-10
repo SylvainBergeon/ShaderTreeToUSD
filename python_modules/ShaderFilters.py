@@ -163,6 +163,25 @@ usdInputMap = {
         "rough":"roughness",
         "normal":"normal",
         "displace":"displacement"
+    },
+    "blend":{
+        #--------------------------------------------------- Maths
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY:"ND_multiply",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE:"ND_divide",
+        #--------------------------------------------------- Maths
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_NORMAL:"ND_mix",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_ADD:"ND_plus",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_SUBTRACT:"ND_minus",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_SCREEN:"ND_screen",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_COLORBURN:"ND_burn",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_COLORDODGE:"ND_dodge",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIFFERENCE:"ND_difference",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_OVERLAY:"ND_overlay",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_DARKEN:"",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_HARDLIGHT:"",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_LIGHTEN:"",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_NORMALMULT:"",
+        lx.symbol.sICVAL_TEXTURELAYER_BLEND_SOFTLIGHT:""
     }
 }
 usdTypeMap = {
