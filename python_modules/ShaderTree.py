@@ -382,25 +382,29 @@ def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str
 
 def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
     """
-    Recursively explores and exports a shader tree to a USD stage.
+    Recursively exports a shader tree to a USD stage based on an XML representation.
 
-    This function traverses an XML representation of a shader tree, creating
-    corresponding USD nodes on the given stage. It handles different shader
-    elements such as 'polyRender', 'mask', 'imageMap', 'noise', and
-    'advancedMaterial', creating appropriate USD structures and connections
-    based on the element type and its attributes.
+    This function traverses the XML structure of a shader tree, creating corresponding
+    USD nodes on the specified stage. It handles various shader elements such as
+    'polyRender', 'mask', 'imageMap', 'noise', and 'advancedMaterial', constructing
+    appropriate USD structures and connections according to the element type and its
+    attributes.
+
+    During the traversal, the function utilizes the `context.effectsStack` to manage
+    the current stack of shader effects being applied. This stack is crucial for
+    maintaining the correct order and hierarchy of effects, ensuring that each shader
+    node is processed with the appropriate context. As the tree is traversed, effects
+    are pushed onto or popped from the stack, allowing for nested shader operations
+    to be correctly represented in the USD stage.
 
     Args:
         stage (Usd.Stage): The USD stage where the shader tree will be exported.
         path (str): The base path for the shader tree in the USD stage.
-        context (ShadingContext): The current shading context, which is updated
-            as the tree is traversed.
-        xml (ET.Element): The XML element representing the current node in the
-            shader tree.
+        context (ShadingContext): The current shading context, updated as the tree is traversed.
+        xml (ET.Element): The XML element representing the current node in the shader tree.
 
     Returns:
-        ShadingContext: The updated shading context after processing the shader
-        tree.
+        ShadingContext: The updated shading context after processing the shader tree.
     """
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
@@ -544,6 +548,23 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
     return context
 
 def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
+    """
+    Connects a shader output to a specified input using a blend operator.
+
+    This function defines a shader operator based on the blend type and connects
+    the shader output to the input. It supports various blend effects and handles
+    opacity as a mix factor. If the blend effect is unsupported, it returns the
+    original output.
+
+    Parameters:
+        stage: The USD stage where the shader is defined.
+        path (str): The path to the shader node.
+        connector (shaderConnector): Contains the shader connection details.
+        input (UsdShade.Output): The input to connect to.
+
+    Returns:
+        UsdShade.Output: The resulting shader output after applying the blend.
+    """
     name = connector.name
     blend:str = connector.blend
     opacity:float = connector.opacity
