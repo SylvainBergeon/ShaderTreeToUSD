@@ -1443,51 +1443,56 @@ def copy_and_clean_files():
     
     consolidatePath = getConsolidatedPath()
 
-    # Créer le dossier destination s'il n'existe pas
+    # Create destination path if not existing
     if not os.path.exists(consolidatePath):
         os.makedirs(consolidatePath)
 
-    # Liste des fichiers présents dans consolidatePath
+    # Store all existing files in destination path
     existing_files = []
     for f in os.listdir(consolidatePath):
         fPath = os.path.join(consolidatePath, f)
         if os.path.isfile(fPath):
             existing_files.append(fPath)
     
-    # Copier les fichiers en vérifiant leur date de modification
-    for filePath in textureList:
-        originalPath = filePath
-        newPath = textureList[filePath]
+    # Copy or update files from original path to consolidated path
+    for filePath, newPath in textureList.items():
         
-        # Vérifier si le fichier existe déjà et comparer les dates
-        if (filePath in existing_files):
-            src_mtime = os.path.getmtime(originalPath)
+        # Check if file already exist in consolidated path
+        if (newPath in existing_files):
+            print(f"{os.path.basename(filePath)} exist in existing files")
+            src_mtime = os.path.getmtime(filePath)
             dest_mtime = os.path.getmtime(newPath)
             
-            if src_mtime > dest_mtime:  # Si le fichier source est plus récent
-                shutil.copy2(originalPath, newPath)
+            # if file is ùore recent copy it
+            if src_mtime > dest_mtime:
+                shutil.copy2(filePath, newPath)
                 if (verbose and verboseConsolidate):print(f"🖼️ Texture : {newPath} mise à jour")
 
-            # Supprimer ce fichier de la liste des fichiers existants
-            existing_files.pop(existing_files.index(filePath))
+            # Remove current file from existing
+            print(f"File: {newPath} removed form existing files")
+            existing_files.pop(existing_files.index(newPath))
             
         else:
-            shutil.copy2(originalPath, newPath)
+            shutil.copy2(filePath, newPath)
             if (verbose and verboseConsolidate):print(f"🖼️  texture : {newPath} copiée")
+            print(f"{len(existing_files)} existing {existing_files}")
 
-    # Déplace les fichiers inutilisés si besoin
+    # If files are still present in existing files, they are not useful anymore
     if len(existing_files) > 0:
-        # Dossier "unused" pour les fichiers obsolètes
+        # Create a "unused" sub folder
         unusedPath = os.path.join(consolidatePath, "unused")
         if not os.path.exists(unusedPath):
             os.makedirs(unusedPath)
             
-        # Déplacer les fichiers non présents dans fileList vers "unused"
+        # Move the useless files to the unused folder
         for old_file in existing_files:
             unused_file = os.path.join(unusedPath, os.path.basename(old_file))
+            # if doesn't exist in the unused folder copy it
             if not os.path.exists(unused_file):
                 shutil.move(os.path.join(consolidatePath, old_file), unused_file)
                 if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} déplacée dans 'unused'")
+                
+            # If the file already exist in the unused folder, just delete it
             else:
                 os.remove(os.path.join(consolidatePath, old_file))
                 if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} supprimée, déjà présent dans 'unused'")
