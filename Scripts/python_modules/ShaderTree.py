@@ -60,31 +60,6 @@ class shaderConnector:
     
     def dump(_self) -> str:
         return (f"{_self.name} {_self.output.GetBaseName()} {_self.blend} {_self.opacity}")
-    
-# preFilterChannels option allows to prefilter channels in xmlgetChannels
-# if True, only the channels that are referenced in filters will be kept
-# false is mostly intended for raw export and debug, it should be a little bit slower
-# and should generate bigger xml output file but it can be usefull for importing data
-# in software that are not usd compliant
-# preFilterChannels = False
-
-# consolidateScene : Optional copy all used textures to a sub folder
-# consolidateScene = True
-
-# exportGlPreviewMaterial writes Gl shaders
-# exportGlPreviewMaterial = False
-# export_json = True
-# export_xml = True
-# export_usda = True
-
-# Output log options
-# verbose = False
-# verboseSetValue = False
-# verboseCreateShader = False
-# verboseOverrideValue = False
-# verboseModifyTree = False
-# verboseConsolidate = False
-# verboseUnsupported = False
 
 # textureList is used to store the source path of any texture used by the shaders
 # in order to later consolidate the scene by copying all these textures to a consolidated folder
