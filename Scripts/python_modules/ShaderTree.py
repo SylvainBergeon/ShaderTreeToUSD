@@ -1434,7 +1434,6 @@ def copy_and_clean_files():
         
         # Check if file already exist in consolidated path
         if (newPath in existing_files):
-            print(f"{os.path.basename(filePath)} exist in existing files")
             src_mtime = os.path.getmtime(filePath)
             dest_mtime = os.path.getmtime(newPath)
             
@@ -1450,7 +1449,6 @@ def copy_and_clean_files():
         else:
             shutil.copy2(filePath, newPath)
             if (verbose and verboseConsolidate):print(f"🖼️  texture : {newPath} copiée")
-            print(f"{len(existing_files)} existing {existing_files}")
 
     # If files are still present in existing files, they are not useful anymore
     if len(existing_files) > 0:
