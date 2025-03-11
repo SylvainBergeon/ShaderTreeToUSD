@@ -66,29 +66,69 @@ class shaderConnector:
 # false is mostly intended for raw export and debug, it should be a little bit slower
 # and should generate bigger xml output file but it can be usefull for importing data
 # in software that are not usd compliant
-preFilterChannels = False
+# preFilterChannels = False
 
 # consolidateScene : Optional copy all used textures to a sub folder
-consolidateScene = True
+# consolidateScene = True
 
 # exportGlPreviewMaterial writes Gl shaders
-exportGlPreviewMaterial = False
-export_json = True
-export_xml = True
-export_usda = True
+# exportGlPreviewMaterial = False
+# export_json = True
+# export_xml = True
+# export_usda = True
+
+# Output log options
+# verbose = False
+# verboseSetValue = False
+# verboseCreateShader = False
+# verboseOverrideValue = False
+# verboseModifyTree = False
+# verboseConsolidate = False
+# verboseUnsupported = False
 
 # textureList is used to store the source path of any texture used by the shaders
 # in order to later consolidate the scene by copying all these textures to a consolidated folder
 textureList = dict()
 
-# Output log options
-verbose = True
-verboseSetValue = False
-verboseCreateShader = False
-verboseOverrideValue = False
-verboseModifyTree = True
-verboseConsolidate = False
-verboseUnsupported = True
+# Global variables for user preferences
+preFilterChannels = None
+consolidateScene = None
+exportGlPreviewMaterial = None
+export_json = None
+export_xml = None
+export_usda = None
+verbose = None
+verboseSetValue = None
+verboseCreateShader = None
+verboseOverrideValue = None
+verboseModifyTree = None
+verboseConsolidate = None
+verboseUnsupported = None
+
+def initialize_preferences():
+    """Initialize global variables with user preferences."""
+    global preFilterChannels, consolidateScene, exportGlPreviewMaterial
+    global export_json, export_xml, export_usda
+    global verbose, verboseSetValue, verboseCreateShader
+    global verboseOverrideValue, verboseModifyTree
+    global verboseConsolidate, verboseUnsupported
+
+    preFilterChannels = lx.eval('user.value USDExport_preFilterChannels ?')
+    consolidateScene = lx.eval('user.value USDExport_consolidateScene ?')
+    exportGlPreviewMaterial = lx.eval('user.value USDExport_exportGlPreviewMaterial ?')
+    export_json = lx.eval('user.value USDExport_export_json ?')
+    export_xml = lx.eval('user.value USDExport_export_xml ?')
+    export_usda = lx.eval('user.value USDExport_export_usda ?')
+    verbose = lx.eval('user.value USDExport_verbose ?')
+    verboseSetValue = lx.eval('user.value USDExport_verboseSetValue ?')
+    verboseCreateShader = lx.eval('user.value USDExport_verboseCreateShader ?')
+    verboseOverrideValue = lx.eval('user.value USDExport_verboseOverrideValue ?')
+    verboseModifyTree = lx.eval('user.value USDExport_verboseModifyTree ?')
+    verboseConsolidate = lx.eval('user.value USDExport_verboseConsolidate ?')
+    verboseUnsupported = lx.eval('user.value USDExport_verboseUnsupported ?')
+  
+# Call this function at the start of your script or before using the preferences
+initialize_preferences()
 
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
