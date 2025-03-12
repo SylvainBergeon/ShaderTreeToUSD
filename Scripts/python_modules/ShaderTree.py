@@ -60,7 +60,7 @@ class shaderConnector:
     
     def dump(_self) -> str:
         return (f"{_self.name} {_self.output.GetBaseName()} {_self.blend} {_self.opacity}")
-
+    
 # textureList is used to store the source path of any texture used by the shaders
 # in order to later consolidate the scene by copying all these textures to a consolidated folder
 textureList = dict()
@@ -72,6 +72,7 @@ exportGlPreviewMaterial = None
 export_json = None
 export_xml = None
 export_usda = None
+export_diagnostic = None
 verbose = None
 verboseSetValue = None
 verboseCreateShader = None
@@ -79,11 +80,26 @@ verboseOverrideValue = None
 verboseModifyTree = None
 verboseConsolidate = None
 verboseUnsupported = None
+export_diagnostic = None
+xmlDiag = None
 
+def diag(sectionName:str, xml:ET.Element|None, diagElementName:str, diagtext:str):
+    if not export_diagnostic: return
+       
+    section = xmlDiag.find(sectionName)
+    if section is None:
+        section = ET.Element(sectionName)
+        xmlDiag.append(section)
+        
+    diagElement = ET.Element(diagElementName)
+    diagElement.text = diagtext
+    
+    section.append(diagElement)
+        
 def initialize_preferences():
     """Initialize global variables with user preferences."""
     global preFilterChannels, consolidateScene, exportGlPreviewMaterial
-    global export_json, export_xml, export_usda
+    global export_json, export_xml, export_usda, export_diagnostic
     global verbose, verboseSetValue, verboseCreateShader
     global verboseOverrideValue, verboseModifyTree
     global verboseConsolidate, verboseUnsupported
@@ -94,6 +110,7 @@ def initialize_preferences():
     export_json = lx.eval('user.value USDExport_export_json ?')
     export_xml = lx.eval('user.value USDExport_export_xml ?')
     export_usda = lx.eval('user.value USDExport_export_usda ?')
+    export_diagnostic = lx.eval('user.value USDExport_saveDiagnostic ?')
     verbose = lx.eval('user.value USDExport_verbose ?')
     verboseSetValue = lx.eval('user.value USDExport_verboseSetValue ?')
     verboseCreateShader = lx.eval('user.value USDExport_verboseCreateShader ?')
@@ -101,7 +118,7 @@ def initialize_preferences():
     verboseModifyTree = lx.eval('user.value USDExport_verboseModifyTree ?')
     verboseConsolidate = lx.eval('user.value USDExport_verboseConsolidate ?')
     verboseUnsupported = lx.eval('user.value USDExport_verboseUnsupported ?')
-  
+    
 # Call this function at the start of your script or before using the preferences
 initialize_preferences()
 
@@ -119,9 +136,14 @@ def export_basic_execute(Cmd_obj, msg):
         Cmd_obj: The command object, not used in this function.
         msg: The message object, not used in this function.
     """
+    global xmlDiag
+    if export_diagnostic:
+        xmlDiag = ET.Element("diagnostic")
     
     scene = modo.scene.current()
     fileName = basestring(scene.filename).removesuffix(".lxo")
+    diag("Files", None, "Set", f"filename = {os.path.basename(fileName)}.lxo")
+    diag("Files", None, "Set", f"project path = {os.path.dirname(fileName)}")
 
     rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(rendererId)
@@ -138,7 +160,16 @@ def export_basic_execute(Cmd_obj, msg):
     
     #----------- as usda
     if export_usda: writeUsda(fileName, xmlShaderTree)
-
+    
+    #----------- Write diadnostic file
+    if export_diagnostic:
+        ET.indent(xmlDiag, space="   ")
+        xmlString = ET.tostring(xmlDiag, method="xml", xml_declaration=True).decode()
+        fout = open(fileName + "_diagnostic.xml",'w') 
+        fout.write(xmlString)
+        fout.close()
+        del xmlDiag
+        
 # Write the data as XML
 def writeXml(fileName, xml:ET.Element):
     ET.indent(xml, space="   ")
@@ -146,6 +177,8 @@ def writeXml(fileName, xml:ET.Element):
     fout = open(fileName + ".xml",'w') 
     fout.write(xmlString)
     fout.close()
+    
+    diag("Files", None, "Save", f"{os.path.basename(fileName)}.xml saved succesfully !")
 
 # Write the data as USDA
 def writeUsda(filename:str, xml:ET.Element):
@@ -162,12 +195,16 @@ def writeUsda(filename:str, xml:ET.Element):
     if consolidateScene:
         copy_and_clean_files()
         print("✅ Scene consolidated")
+        
+    diag("Files", None, "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
 
 # Write the data as JSON
 def writeJson(filename, dictionary):
     with open(filename + ".json", 'w') as fout:
         json.dump(dictionary, fout, indent=1)
         fout.flush()
+        
+    diag("Files", None, "Save", f"{os.path.basename(filename)}.xm saved succesfully !")
 
 # Recursively convert the shader tree structure to xml
 def xmlExportItem(item:modo.Item):
@@ -636,7 +673,6 @@ def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
             output = operator.CreateOutput('out', outType)
     
     return output
-
 def get_key_from_value(dict, value):
     """
     Retrieve the key associated with a given value in usdInputMap['effects'].
@@ -1443,7 +1479,7 @@ def copy_and_clean_files():
                 if (verbose and verboseConsolidate):print(f"🖼️ Texture : {newPath} mise à jour")
 
             # Remove current file from existing
-            print(f"File: {newPath} removed form existing files")
+            if (verbose and verboseConsolidate):print(f"🖼️ Texture : {newPath} removed form existing files")
             existing_files.pop(existing_files.index(newPath))
             
         else:
