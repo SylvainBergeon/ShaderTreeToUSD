@@ -83,7 +83,7 @@ verboseUnsupported = None
 export_diagnostic = None
 xmlDiag = None
 
-def diag(sectionName:str, xml:ET.Element|None, diagElementName:str, diagtext:str):
+def diag(sectionName:str, diagElementName:str, diagtext:str):
     if not export_diagnostic: return
        
     section = xmlDiag.find(sectionName)
@@ -142,8 +142,8 @@ def export_basic_execute(Cmd_obj, msg):
     
     scene = modo.scene.current()
     fileName = basestring(scene.filename).removesuffix(".lxo")
-    diag("Files", None, "Set", f"filename = {os.path.basename(fileName)}.lxo")
-    diag("Files", None, "Set", f"project path = {os.path.dirname(fileName)}")
+    diag("Files", "Set", f"filename = {os.path.basename(fileName)}.lxo")
+    diag("Files", "Set", f"project path = {os.path.dirname(fileName)}")
 
     rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(rendererId)
@@ -178,11 +178,12 @@ def writeXml(fileName, xml:ET.Element):
     fout.write(xmlString)
     fout.close()
     
-    diag("Files", None, "Save", f"{os.path.basename(fileName)}.xml saved succesfully !")
+    diag("Files", "Save", f"{os.path.basename(fileName)}.xml saved succesfully !")
 
 # Write the data as USDA
 def writeUsda(filename:str, xml:ET.Element):
     print("saving usd ...")
+    
     stage = Usd.Stage.CreateNew(filename + '.usda')
     
     context = ShadingContext()
@@ -190,13 +191,13 @@ def writeUsda(filename:str, xml:ET.Element):
     
     stage.GetRootLayer().Save()
     print("✅ USD saved")
+    diag("Files", "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
     
     #----------- consolidate scene
     if consolidateScene:
         copy_and_clean_files()
         print("✅ Scene consolidated")
-        
-    diag("Files", None, "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
+        diag("Files", "Save", f"Consolidation succesful !")
 
 # Write the data as JSON
 def writeJson(filename, dictionary):
@@ -204,7 +205,7 @@ def writeJson(filename, dictionary):
         json.dump(dictionary, fout, indent=1)
         fout.flush()
         
-    diag("Files", None, "Save", f"{os.path.basename(filename)}.xm saved succesfully !")
+    diag("Files", "Save", f"{os.path.basename(filename)}.xm saved succesfully !")
 
 # Recursively convert the shader tree structure to xml
 def xmlExportItem(item:modo.Item):
@@ -460,6 +461,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
     """
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
+    diag("usdExportShaderTree", elementName, f"Processing element {elementName}")
     
     #TODO : find a way to manage the override system using stacking priority, blending amount and blending type (mult, add, substract etc...)
     
@@ -469,6 +471,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if (context.material == None):
                 newpath = path
             if (verbose):print("✅ Create SHADERTREE at %s" % (path))
+            diag("usdExportShaderTree", xml.tag, f"Create SHADERTREE at {path}")
             
             UsdGeom.Scope.Define(stage, newpath)
             
@@ -483,6 +486,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 if ptag != "":
                     newpath = path + "/" + cleanName(ptag)
                     if (verbose and verboseModifyTree):print("✅ Create MASK at [%s]" % (newpath))
+                    diag("usdExportShaderTree", xml.tag, f"Create MASK at [{newpath}]")
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
                     context.material = material
@@ -490,6 +494,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 else:
                     newpath = path + "/" +  cleanName(xml.get('name'))
                     if (verbose and verboseModifyTree):print("✅ Create SCOPE at [%s]" % (newpath))
+                    diag("usdExportShaderTree", xml.tag, f"Create SCOPE at [{newpath}]")
                     #---------------------------------------------------- Create sub scope definition
                     UsdGeom.Scope.Define(stage, newpath)
                 
@@ -533,6 +538,7 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 effectName = xml.find('channels/effect').get('value')
                 sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
                 if (verbose and verboseModifyTree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
+                diag("usdExportShaderTree", xml.tag, f"Create IMAGEMAP at [{path}] as [{effectName}]")
                 
                 textureOutput:UsdShade.Output = createUsdTextureOutput(stage, context, xml, sdfType)
                 #---------------------------------------------------- Add output to the current effect stack in context
@@ -673,6 +679,7 @@ def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
             output = operator.CreateOutput('out', outType)
     
     return output
+
 def get_key_from_value(dict, value):
     """
     Retrieve the key associated with a given value in usdInputMap['effects'].
@@ -737,12 +744,14 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
         materialConnector = ""
         surfaceId = "UsdPreviewSurface"
         if (verbose and verboseCreateShader) :print ("✅ Create PREVIEW SHADER at : %s" % path)
+        diag("createUsdShader", xml.get('name'), "Create PREVIEW SHADER at : %s" % path)
     else:
         brdfType = xml.find('channels/brdfType').get('value')
         connectorOut = 'surface'
         materialConnector = "mtlx:"
         surfaceId = "ND_standard_surface_surfaceshader"
         if (verbose and verboseCreateShader) :print ("✅ Create SHADER at : %s" % path)
+        diag("createUsdShader", xml.get('name'), "Create SHADER at : %s" % path)
     
         
     shader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
@@ -771,25 +780,25 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
 # Apply overrides when things are specific to how the shaderTree works (multiple options due to legacy and updates)
 def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> str|None: 
     """
-Apply overrides to a given USD value based on the BRDF type and Modo input name.
+    Apply overrides to a given USD value based on the BRDF type and Modo input name.
 
-This function modifies the USD value according to specific rules defined for
-different BRDF types ('gtr' and 'principled') and Modo input names. It uses
-values from an XML element to determine the necessary transformations.
+    This function modifies the USD value according to specific rules defined for
+    different BRDF types ('gtr' and 'principled') and Modo input names. It uses
+    values from an XML element to determine the necessary transformations.
 
-Parameters:
-    usdValue (str): The original USD value to be potentially overridden.
-    brdfType (str): The type of BRDF ('gtr' or 'principled') to determine the
-                    override logic.
-    modoInputName (str): The name of the Modo input channel to apply the
-                         override to.
-    xml (ET.Element): An XML element containing channel data used for
-                      determining overrides.
+    Parameters:
+        usdValue (str): The original USD value to be potentially overridden.
+        brdfType (str): The type of BRDF ('gtr' or 'principled') to determine the
+                        override logic.
+        modoInputName (str): The name of the Modo input channel to apply the
+                            override to.
+        xml (ET.Element): An XML element containing channel data used for
+                        determining overrides.
 
-Returns:
-    str | None: The overridden USD value if changes were made, otherwise the
-                original value.
-"""
+    Returns:
+        str | None: The overridden USD value if changes were made, otherwise the
+                    original value.
+    """
     #---------------------------------------------------- Get useRefIdx value for remapping
     useRefIdx = (xml.find('channels/useRefIdx').get('value')=="1")
     specRefIdx = (xml.find('channels/specRefIdx').get('value')=="1")
@@ -874,7 +883,7 @@ Returns:
    
     if  usdValue != originalValue:
         if (verbose and verboseOverrideValue):print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
-        
+        diag("applyOverrides", f"{xml.get('name')}", f"{modoInputName} from {originalValue} to {usdValue}")
     return usdValue
 
 # Create USD Shader input according to modo channel scopped
@@ -1476,15 +1485,18 @@ def copy_and_clean_files():
             # if file is ùore recent copy it
             if src_mtime > dest_mtime:
                 shutil.copy2(filePath, newPath)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {newPath} mise à jour")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(newPath)} mise à jour")
+                diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)} mise à jour")
 
             # Remove current file from existing
-            if (verbose and verboseConsolidate):print(f"🖼️ Texture : {newPath} removed form existing files")
+            if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(newPath)} removed form existing files")
+            diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)} removed form existing files")
             existing_files.pop(existing_files.index(newPath))
             
         else:
             shutil.copy2(filePath, newPath)
-            if (verbose and verboseConsolidate):print(f"🖼️  texture : {newPath} copiée")
+            if (verbose and verboseConsolidate):print(f"🖼️  texture : {os.path.basename(newPath)} copiée")
+            diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)} copiée")
 
     # If files are still present in existing files, they are not useful anymore
     if len(existing_files) > 0:
@@ -1499,18 +1511,24 @@ def copy_and_clean_files():
             # if doesn't exist in the unused folder copy it
             if not os.path.exists(unused_file):
                 shutil.move(os.path.join(consolidatePath, old_file), unused_file)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} déplacée dans 'unused'")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(old_file)} déplacée dans 'unused'")
+                diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)}  déplacée dans 'unused'")
                 
             # If the file already exist in the unused folder, just delete it
             else:
                 os.remove(os.path.join(consolidatePath, old_file))
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {old_file} supprimée, déjà présent dans 'unused'")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(old_file)} supprimée, déjà présent dans 'unused'")
+                diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(old_file)} supprimée, déjà présent dans 'unused'")
 
 # Clean the shadertree layers names (remove white space and parenthesis)
 def cleanName(name:str) -> str:
+    originalName = name
     if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
     name = replace_chars(name, ["(", ")"], "")
     name = replace_chars(name, ["(", ")", " ", "-", ".", ":", "#", ";", "?", ","], "_")
+    
+    if name != originalName:
+        diag("copy_and_clean_files", "file", f"Name : {os.path.basename(originalName)} renamed as {os.path.basename(name)}")
     return name
 
 def remove_chars(string, chars_to_remove):
