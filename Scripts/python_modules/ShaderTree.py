@@ -645,7 +645,13 @@ def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
             usdOperatorName = usdInputMap["blend"][blend] + getNodeTypePrefix(outType)
             operator.CreateIdAttr(usdOperatorName)
             operator.CreateInput('in1', output.GetTypeName()).ConnectToSource(output)
-            operator.CreateInput('in2', output.GetTypeName()).ConnectToSource(input)
+            
+            #----------------------------------------------------- Set or connect input depending on its type
+            if type(input) is UsdShade.Output:
+                operator.CreateInput('in2', output.GetTypeName()).ConnectToSource(input)
+            else:
+                operator.CreateInput('in2', output.GetTypeName()).Set(eval(input))
+            
             output = operator.CreateOutput('out', outType)
             
             #----------------------------------------------------- set opacity as mix
@@ -653,8 +659,14 @@ def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
             usdOperatorName = "ND_mix" + getNodeTypePrefix(outType)
             operator.CreateIdAttr(usdOperatorName)
             operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
-            operator.CreateInput('bg', output.GetTypeName()).ConnectToSource(input)
-            operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity, Sdf.ValueTypeNames.Float)
+            
+            #----------------------------------------------------- Set or connect input depending on its type
+            if type(input) is UsdShade.Output:
+                operator.CreateInput('bg', output.GetTypeName()).ConnectToSource(input)
+            else:
+                operator.CreateInput('bg', output.GetTypeName()).Set(eval(input))
+            
+            operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
             
             #----------------------------------------------------- Expose output
             output = operator.CreateOutput('out', outType)
@@ -928,7 +940,9 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     invert = int(xml.find("channels/invert").get('value'))
     srcLow = float(xml.find('channels/min').get('value'))
     srcHigh = float(xml.find('channels/max').get('value'))
-    brightness = float(xml.find('channels/brightness').get('value'))-1
+    
+    brightness = float(xml.find('channels/brightness').get('value'))
+    
     contrast = float(xml.find('channels/contrast').get('value'))
     swizzling = xml.find('channels/swizzling').get('value') == "1"
     swizzlingOut = xml.find('channels/rgba').get('value')
@@ -1009,7 +1023,7 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
     
     #---------------------------------------------------- Create brightness adjustments
     textureBrightness = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/brightness")
-    textureBrightness.CreateIdAttr('ND_add' + getNodeTypePrefix(outType))
+    textureBrightness.CreateIdAttr('ND_multiply' + getNodeTypePrefix(outType))
     textureBrightness.CreateInput("in1", outType).ConnectToSource(adjustedTextureOutput)
     textureBrightness.CreateInput('in2', outType).ConnectToSource(textureAdjustNodeGraph.GetInput('brightness'))
     adjustedTextureOutput:UsdShade.Output = textureBrightness.CreateOutput('out', outType)
