@@ -507,11 +507,17 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 #-------------------------------------------------------- Connect child effects together
                 for effectName in context.effectsStack.keys():
                     
+                    # ////////////////////////////////// WEAK - Should be better too use a dedicated mapping table with default value or something
                     #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
                     usdInputName = usdInputMap['effect'][effectName]
                     modoInputName = get_key_from_value(stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL]['principled'], usdInputName)
-                    materialInputValue = context.advancedMaterialChannels.find(modoInputName).get('value')
+                    if context.advancedMaterialChannels.find(modoInputName) != None:
+                        materialInputValue = context.advancedMaterialChannels.find(modoInputName).get('value')
+                    else:
+                        materialInputValue = floatToOutType("0.0", usdTypeMap[usdInputName])
+                    
                     output = materialInputValue
+                    # ////////////////////////////////// WEAK
                     
                     #----------------------------------------------------- Create connections
                     for connectorIndex in range(0, len(context.effectsStack[effectName])):
@@ -557,35 +563,13 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 materialPath = material.GetPath()
                 
                 texLocatorOutput = create3DTextureLocator(stage, materialPath, xml)
-                
-                #---------------------------------------------------- Create texture definition even if modo layer is disabled
-                noisePath:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
-                noiseShader = UsdShade.Shader.Define(stage, noisePath)
-                noiseShader.CreateIdAttr("ND_unifiednoise3d_float")
-                #---------------------------------------------------- Common
-                noiseShader.CreateInput("position", Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocatorOutput)
-                noiseShader.CreateInput("freq", Sdf.ValueTypeNames.Vector3f).Set((1.0,1.0,1.0))
-                noiseShader.CreateInput("offset", Sdf.ValueTypeNames.Vector3f).Set((0.0,0.0,0.0))
-                noiseShader.CreateInput("Jitter", Sdf.ValueTypeNames.Float).Set(1.0)
-                noiseShader.CreateInput("type", Sdf.ValueTypeNames.Int).Set(3) # 0:Perlin 1:Cell 2:Worley 3:Fractal
-                
-                #---------------------------------------------------- Post Process
-                noiseShader.CreateInput("outmin", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value1').get('value'))/2 + 0.5)
-                noiseShader.CreateInput("outmax", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value2').get('value')))
-                noiseShader.CreateInput("clampoutput", Sdf.ValueTypeNames.Int).Set(0)
-                
-                #---------------------------------------------------- Fractal
-                noiseShader.CreateInput("octaves", Sdf.ValueTypeNames.Int).Set(int(xml.find('channels/freqs').get('value')))
-                noiseShader.CreateOutput("lacunarity", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/freqRatio').get('value')))
-                noiseShader.CreateOutput("diminish", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/ampRatio').get('value')))
-                
-                textureOutput = noiseShader.CreateOutput("out", Sdf.ValueTypeNames.Float)
-                
-                #---------------------------------------------------- Add output to the current effect stack in context
-                context = addShaderConnectorToContext(xml, textureOutput, context)
+                textureOutput = create3dtexture(stage, materialPath, xml, texLocatorOutput)
                 
                 #---------------------------------------------------- Connect to shader input
                 connectTextureOutputToShaderInput(stage, context, effectName, textureOutput, xml)
+    
+                #---------------------------------------------------- Add output to the current effect stack in context
+                context = addShaderConnectorToContext(xml, textureOutput, context)
             
         #------------------------------------------------------- If material, create shader at defined path
         case 'advancedMaterial':
@@ -604,6 +588,32 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 context.previewShader = previewShader
  
     return context
+
+def create3dtexture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
+    #---------------------------------------------------- Create texture definition even if modo layer is disabled
+    noisePath:Path = path.AppendPath(cleanName(xml.get('name')))
+    noiseShader = UsdShade.Shader.Define(stage, noisePath)
+    noiseShader.CreateIdAttr("ND_unifiednoise3d_float")
+    
+    #---------------------------------------------------- Common
+    noiseShader.CreateInput("position", Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocatorOutput)
+    noiseShader.CreateInput("freq", Sdf.ValueTypeNames.Vector3f).Set((1.0,1.0,1.0))
+    noiseShader.CreateInput("offset", Sdf.ValueTypeNames.Vector3f).Set((0.0,0.0,0.0))
+    noiseShader.CreateInput("Jitter", Sdf.ValueTypeNames.Float).Set(1.0)
+    noiseShader.CreateInput("type", Sdf.ValueTypeNames.Int).Set(3) # 0:Perlin 1:Cell 2:Worley 3:Fractal
+    
+    #---------------------------------------------------- Post Process
+    noiseShader.CreateInput("outmin", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value1').get('value'))/2 + 0.5)
+    noiseShader.CreateInput("outmax", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value2').get('value')))
+    noiseShader.CreateInput("clampoutput", Sdf.ValueTypeNames.Int).Set(0)
+    
+    #---------------------------------------------------- Fractal
+    noiseShader.CreateInput("octaves", Sdf.ValueTypeNames.Int).Set(int(xml.find('channels/freqs').get('value')))
+    noiseShader.CreateOutput("lacunarity", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/freqRatio').get('value')))
+    noiseShader.CreateOutput("diminish", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/ampRatio').get('value')))
+    
+    return noiseShader.CreateOutput("out", Sdf.ValueTypeNames.Float)
+    
 
 def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
     """
