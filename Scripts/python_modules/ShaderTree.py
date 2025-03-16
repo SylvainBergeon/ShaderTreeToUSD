@@ -66,7 +66,6 @@ class shaderConnector:
 textureList = dict()
 
 # Global variables for user preferences
-preFilterChannels = None
 consolidateScene = None
 exportGlPreviewMaterial = None
 export_json = None
@@ -98,13 +97,12 @@ def diag(sectionName:str, diagElementName:str, diagtext:str):
         
 def initialize_preferences():
     """Initialize global variables with user preferences."""
-    global preFilterChannels, consolidateScene, exportGlPreviewMaterial
+    global consolidateScene, exportGlPreviewMaterial
     global export_json, export_xml, export_usda, export_diagnostic
     global verbose, verboseSetValue, verboseCreateShader
     global verboseOverrideValue, verboseModifyTree
     global verboseConsolidate, verboseUnsupported
 
-    preFilterChannels = lx.eval('user.value USDExport_preFilterChannels ?')
     consolidateScene = lx.eval('user.value USDExport_consolidateScene ?')
     exportGlPreviewMaterial = lx.eval('user.value USDExport_exportGlPreviewMaterial ?')
     export_json = lx.eval('user.value USDExport_export_json ?')
@@ -187,7 +185,7 @@ def writeUsda(filename:str, xml:ET.Element):
     stage = Usd.Stage.CreateNew(filename + '.usda')
     
     context = ShadingContext()
-    context = usdExportShaderTree(stage, "/shadertree", context, xml)
+    context = USD_export_shadertree(stage, "/shadertree", context, xml)
     
     stage.GetRootLayer().Save()
     print("✅ USD saved")
@@ -228,7 +226,7 @@ def xmlExportItem(item:modo.Item):
     
     out_xml = ET.Element(item.type)
     out_xml.set('name', replace_chars(str(item.name), ["(", ")", " "], "_"))
-    out_xml.set('name', cleanName(str(item.name)))
+    out_xml.set('name', clean_name(str(item.name)))
     out_xml.set('id', item.id)
     out_xml.set('type', item.type)
     
@@ -367,11 +365,7 @@ def getChannels(item:modo.Item):
     for mChan in item.channels():
         chanName = str(mChan.name).split(".")[0] # Important ! if not using the first part of the name, channelTriple are treated as 3 channels
         d = formatChannel(item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
-        if preFilterChannels:
-            if (item.type in filters.keys()) and (len(filters[item.type])>0):
-                d_channels[chanName] = d
-        else:
-            d_channels[chanName] = d
+        d_channels[chanName] = d
             
     
     alphaSort = OrderedDict(sorted(d_channels.items()))
@@ -433,7 +427,7 @@ def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str
     
     return chan
 
-def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
+def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
     """
     Recursively exports a shader tree to a USD stage based on an XML representation.
 
@@ -461,7 +455,6 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
     """
     #----------------------------------------------------------- Recursively explotre the shaderTree and update material usd path
     elementName = xml.tag
-    diag("usdExportShaderTree", elementName, f"Processing element {elementName}")
     
     #TODO : find a way to manage the override system using stacking priority, blending amount and blending type (mult, add, substract etc...)
     
@@ -471,12 +464,12 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             if (context.material == None):
                 newpath = path
             if (verbose):print("✅ Create SHADERTREE at %s" % (path))
-            diag("usdExportShaderTree", xml.tag, f"Create SHADERTREE at {path}")
+            diag("USD_Create", xml.tag, f"Create SHADERTREE at {path}")
             
             UsdGeom.Scope.Define(stage, newpath)
             
             for child in xml.findall('*'):
-                context = usdExportShaderTree(stage, newpath, context, child)
+                context = USD_export_shadertree(stage, newpath, context, child)
 
         #------------------------------------------------------- If mask, explore all child layers
         case 'mask':
@@ -484,23 +477,23 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 ptag = xml.find("channels/ptag").get("value")
                 
                 if ptag != "":
-                    newpath = path + "/" + cleanName(ptag)
+                    newpath = path + "/" + clean_name(ptag)
                     if (verbose and verboseModifyTree):print("✅ Create MASK at [%s]" % (newpath))
-                    diag("usdExportShaderTree", xml.tag, f"Create MASK at [{newpath}]")
+                    diag("USD_Create", xml.tag, f"Create MASK at [{newpath}]")
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
                     context.material = material
                 
                 else:
-                    newpath = path + "/" +  cleanName(xml.get('name'))
+                    newpath = path + "/" +  clean_name(xml.get('name'))
                     if (verbose and verboseModifyTree):print("✅ Create SCOPE at [%s]" % (newpath))
-                    diag("usdExportShaderTree", xml.tag, f"Create SCOPE at [{newpath}]")
+                    diag("USD_Create", xml.tag, f"Create SCOPE at [{newpath}]")
                     #---------------------------------------------------- Create sub scope definition
                     UsdGeom.Scope.Define(stage, newpath)
                 
                 for child in xml.findall('*'):
                     if child.tag != "channels":
-                        context = usdExportShaderTree(stage, newpath, context, child)
+                        context = USD_export_shadertree(stage, newpath, context, child)
                     else:
                         pass
                     
@@ -523,10 +516,10 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                     for connectorIndex in range(0, len(context.effectsStack[effectName])):
                         connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
                         # Create the connector nodes, connect the previous output and expose the new output
-                        output = usd_connect_operator(stage, newpath, connector, output)
+                        output = USD_connect_operator(stage, newpath, connector, output)
                 
                     #---------------------------------------------------- Connect the latest exposed output to the shader input corresponding to the current effect
-                    connectTextureOutputToShaderInput(stage, context, effectName, output, xml)
+                    USD_connect_texture_output_to_shader_input(stage, context, effectName, output, xml)
                 
                 #-------------------------------------------------------- Reset stacks
                 context.effectsStack = OrderedDict()
@@ -536,22 +529,21 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             material:UsdShade.Material = context.material
             shader:UsdShade.Shader = context.shader
             previewShader:UsdShade.Shader = context.previewShader
-            name = cleanName(xml.get('name'))
+            name = clean_name(xml.get('name'))
             path:Path = material.GetPath().AppendPath(name)
             
             #---------------------------------------------------- Connect texture to shader and previewShader inputs if possible
             if xml.find('channels/enable').get('value') == "1":
                 effectName = xml.find('channels/effect').get('value')
                 sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
-                if (verbose and verboseModifyTree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
-                diag("usdExportShaderTree", xml.tag, f"Create IMAGEMAP at [{path}] as [{effectName}]")
                 
-                textureOutput:UsdShade.Output = createUsdTextureOutput(stage, context, xml, sdfType)
+                if (verbose and verboseModifyTree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
+                diag("USD_Create", xml.tag, f"Create IMAGEMAP at [{path}] as [{effectName}]")
+                
+                textureOutput:UsdShade.Output = USD_create_texture_output(stage, context, xml, sdfType)
+                
                 #---------------------------------------------------- Add output to the current effect stack in context
                 context = addShaderConnectorToContext(xml, textureOutput, context)
-                
-                #---------------------------------------------------- Connect to shader input
-                #connectTextureOutputToShaderInput(stage, context, effectName, textureOutput, xml)
         
         #------------------------------------------------------- If imageMap, set USD graph with adjustments based on still image properties and effects
         case "noise":
@@ -562,11 +554,14 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
                 effectName = xml.find('channels/effect').get('value')
                 materialPath = material.GetPath()
                 
-                texLocatorOutput = create3DTextureLocator(stage, materialPath, xml)
-                textureOutput = create3dtexture(stage, materialPath, xml, texLocatorOutput)
+                if (verbose and verboseModifyTree):print("✅ Create 3D NOISE at %s as %s" % (path, effectName))
+                diag("USD_Create", xml.tag, f"Create 3D NOISE at [{path}] as [{effectName}]")
+                
+                texLocatorOutput = USD_create_3D_texture_transform(stage, materialPath, xml)
+                textureOutput = USD_create_3d_texture(stage, materialPath, xml, texLocatorOutput)
                 
                 #---------------------------------------------------- Connect to shader input
-                connectTextureOutputToShaderInput(stage, context, effectName, textureOutput, xml)
+                USD_connect_texture_output_to_shader_input(stage, context, effectName, textureOutput, xml)
     
                 #---------------------------------------------------- Add output to the current effect stack in context
                 context = addShaderConnectorToContext(xml, textureOutput, context)
@@ -578,20 +573,28 @@ def usdExportShaderTree(stage:Usd.Stage, path:str, context:ShadingContext, xml:E
             
             material:UsdShade.Material = context.material
             if (verbose and verboseModifyTree):print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
+            diag("USD_Create", xml.tag, f"Create ADVANCED MATERIAL at {material.GetPath()}")
             #---------------------------------------------------- Create material definition
-            shader = createUsdShader(stage, material, xml, False)
+            shader = USD_create_shader(stage, material, xml, False)
             context.shader = shader
             context.advancedMaterialChannels = xml.find("channels")
             #---------------------------------------------------- Create gl preview material definition
             if (exportGlPreviewMaterial):
-                previewShader = createUsdShader(stage, material, xml, True)
+                previewShader = USD_create_shader(stage, material, xml, True)
                 context.previewShader = previewShader
+        
+        case "channels":
+            pass
+        
+        case _:
+            if(verbose and verboseUnsupported): print(f"❎ Unsupported: {elementName} item type is not yet supported")
+            diag("Unsupported", "Item_Type", f"[{elementName}] is not yet supported (ignored)")
  
     return context
 
-def create3dtexture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
+def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
     #---------------------------------------------------- Create texture definition even if modo layer is disabled
-    noisePath:Path = path.AppendPath(cleanName(xml.get('name')))
+    noisePath:Path = path.AppendPath(clean_name(xml.get('name')))
     noiseShader = UsdShade.Shader.Define(stage, noisePath)
     noiseShader.CreateIdAttr("ND_unifiednoise3d_float")
     
@@ -614,8 +617,7 @@ def create3dtexture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput
     
     return noiseShader.CreateOutput("out", Sdf.ValueTypeNames.Float)
     
-
-def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
+def USD_connect_operator(stage, path:str, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
     """
     Connects a shader output to a specified input using a blend operator.
 
@@ -645,7 +647,8 @@ def usd_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
     
     #----------------------------------------------------- If blend effect not supported
     if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
-        if verbose and verboseUnsupported: print(f"❎ UNSUPPORTED: {blend} blend effect is not yet supported")
+        if verbose and verboseUnsupported: print(f"❎ Unsupported: {blend} blend effect is not yet supported")
+        diag("Unsupported", "Blend_Mode", f"[{blend}] in {texturePath} is not yet supported (ignored)")
         return output
     
     match blend:
@@ -737,7 +740,7 @@ def addShaderConnectorToContext(xml:ET.Element, output:UsdShade.Output, context:
     return context
     
 # Create USD shader for advanced material layer
-def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
+def USD_create_shader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
     """
     Create a USD shader from an XML element and add it to a given stage and material.
 
@@ -756,7 +759,7 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
         UsdShade.Shader: The created USD shader.
     """
     
-    path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
+    path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')))
     
     #---------------------------------------------------- Get brdfType value for remapping
     if (isPreview):
@@ -791,7 +794,7 @@ def createUsdShader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element,
         if not isPreview:
             usdValue = applyOverrides(usdValue, brdfType, modoInputName, xml)
         if usdInputName != None:
-            input = createUsdShaderInput(shader, usdInputName, usdValue, usdTypeMap[usdInputName])
+            input = USD_create_shader_input(shader, usdInputName, usdValue, usdTypeMap[usdInputName])
     
     shaderOutPort = shader.CreateOutput(connectorOut, Sdf.ValueTypeNames.Token)
     surfaceTerminal = material.CreateOutput(materialConnector+connectorOut, Sdf.ValueTypeNames.Token)
@@ -909,7 +912,7 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
     return usdValue
 
 # Create USD Shader input according to modo channel scopped
-def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input: 
+def USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input: 
     if usdInputName != None and type(usdValue) != None:
         if (verbose and verboseSetValue):print("🔁 SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
         if type(usdValue) is UsdShade.Output:
@@ -938,78 +941,112 @@ def createUsdShaderInput(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfT
     return None
 
 # Create and connect USD texture Shader when image found in the shader tree
-def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Input:
+def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output:
     material:UsdShade.Material = context.material
-    # shader:UsdShade.Shader = context.shader
-    # advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
-    # previewShader:UsdShade.Shader = context.previewShader
-    materialPath = material.GetPath()
     
-    #---------------------------------------------------- Create the texture locator
-    texturePath:Path = materialPath.AppendPath(cleanName(xml.get('name')))
-    invert = int(xml.find("channels/invert").get('value'))
-    srcLow = float(xml.find('channels/min').get('value'))
-    srcHigh = float(xml.find('channels/max').get('value'))
-    
-    brightness = float(xml.find('channels/brightness').get('value'))
-    
-    contrast = float(xml.find('channels/contrast').get('value'))
-    swizzling = xml.find('channels/swizzling').get('value') == "1"
-    swizzlingOut = xml.find('channels/rgba').get('value')
-
-    #---------------------------------------------------- Define by projection type
-    projType = xml.find('txtrLocator/channels/projType').get('value')
-    
-    #---------------------------------------------------- Create the texture transform
+    #---------------------------------------------------- Store the texture path for further consolidation
     textureFilePath = xml.find('videoStill/channels/filename').get('value')
     
     if consolidateScene :
-        consolidatePath = getConsolidatedPath()
+        consolidatePath = get_consolidated_path()
         file_name = os.path.basename(textureFilePath)
         consolidatedTextureFilePath = os.path.join(consolidatePath, file_name)
         
         if (textureFilePath not in textureList):
             textureList[textureFilePath] = consolidatedTextureFilePath
+            
+    #---------------------------------------------------- Create the texture locator
+    materialPath = material.GetPath()
+    texturePath:Path = materialPath.AppendPath(clean_name(xml.get('name')))
+
+    #---------------------------------------------------- Define by projection type
+    projType = xml.find('txtrLocator/channels/projType').get('value')
     
+    #---------------------------------------------------- Create the texture transform
     textureTransformOutput:UsdShade.Output
+    textureOutput:UsdShade.Output
     
     match projType:
         case "uv":
-            textureTransformOutput = createUVTextureLocator(stage, materialPath, xml)
-            #---------------------------------------------------- Create the UV texture
-            texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
-            texture.CreateIdAttr('ND_image' + getNodeTypePrefix(outType))
-            texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
-            texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
-            texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
-            texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformOutput)
-            textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
+            #---------------------------------------------------- Create the UV texture transform node
+            textureTransformOutput = USD_create_UV_texture_transform(stage, materialPath, xml)
+            #---------------------------------------------------- Create the UV texture node
+            textureOutput = USD_create_UV_texure(stage, materialPath, xml, outType, textureTransformOutput)
             
         case "triplanar":
-            textureTransformOutput:UsdShade.Output = create3DTextureLocator(stage, materialPath, xml)
-            #---------------------------------------------------- Create the geometry normal node
-            geometryNormal:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_geoNormal")
-            geometryNormal.CreateIdAttr('ND_normal_vector3')
-            geometryNormalOut:UsdShade.Output = geometryNormal.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-            
+            #---------------------------------------------------- Create the UV texture transform node
+            textureTransformOutput:UsdShade.Output = USD_create_3D_texture_transform(stage, materialPath, xml)
             #---------------------------------------------------- Create the triplanar texture node
-            blend = 1-float(xml.find('txtrLocator/channels/triplanarBlending').get('value'))
-            blendApprox = math.pi / (4 * math.sin(blend * math.pi / 4))
-            texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_triplanarTexture")
-            texture.CreateIdAttr('ND_triplanarprojection' + getNodeTypePrefix(outType))
-            texture.CreateInput('filex', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
-            texture.CreateInput('filey', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
-            texture.CreateInput('filez', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
-            texture.CreateInput('normal', Sdf.ValueTypeNames.Vector3f).ConnectToSource(geometryNormalOut)
-            texture.CreateInput('upaxis', Sdf.ValueTypeNames.Int).Set(1)
-            texture.CreateInput('blend', Sdf.ValueTypeNames.Float).Set(blendApprox)
-            texture.CreateInput("position", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformOutput)
-            textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
+            textureOutput = USD_create_triplanar_texture(stage, materialPath, xml, outType, textureTransformOutput)
+            
+        case _:
+            if(verbose and verboseUnsupported): print(f"❎ Unsupported: {projType} projection type is not yet supported (switched to default UV)")
+            diag("Unsupported", "Projection_Type", f"[{projType}] in {texturePath} is not yet supported (switched to default UV)")
+            #---------------------------------------------------- Create the UV texture transform node
+            textureTransformOutput = USD_create_UV_texture_transform(stage, materialPath, xml)
+            #---------------------------------------------------- Create the UV texture node
+            textureOutput = USD_create_UV_texure(stage, materialPath, xml, outType, textureTransformOutput)
+    
+    #---------------------------------------------------- Create the texture adjust nodegraph
+    textureAdjustNodeGraphOutput = USD_create_texture_adjust_nodegraph(stage, materialPath, xml, outType, textureOutput)
+    
+    return textureAdjustNodeGraphOutput
+
+def USD_create_triplanar_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
+    texturePath:Path = materialPath.AppendPath(clean_name(xml.get('name')))
+    textureFilePath = xml.find('videoStill/channels/filename').get('value')
+
+    #---------------------------------------------------- Create the geometry normal node
+    geometryNormal:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_geoNormal")
+    geometryNormal.CreateIdAttr('ND_normal_vector3')
+    geometryNormalOut:UsdShade.Output = geometryNormal.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+    
+    #---------------------------------------------------- Create the triplanar texture node
+    #                                                     This part needs more love, projection is not perfect
+    blend = 1-float(xml.find('txtrLocator/channels/triplanarBlending').get('value'))
+    blendApprox = math.pi / (4 * math.sin(blend * math.pi / 4))
+    texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_triplanarTexture")
+    texture.CreateIdAttr('ND_triplanarprojection' + getNodeTypePrefix(outType))
+    texture.CreateInput("position", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
+    texture.CreateInput('filex', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
+    texture.CreateInput('filey', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
+    texture.CreateInput('filez', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
+    texture.CreateInput('normal', Sdf.ValueTypeNames.Vector3f).ConnectToSource(geometryNormalOut)
+    texture.CreateInput('upaxis', Sdf.ValueTypeNames.Int).Set(1)
+    texture.CreateInput('blend', Sdf.ValueTypeNames.Float).Set(blendApprox)
+    textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
+    
+    return textureOutput
+
+def USD_create_UV_texure(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
+    texturePath:Path = materialPath.AppendPath(clean_name(xml.get('name')))
+    textureFilePath = xml.find('videoStill/channels/filename').get('value')
+    
+    texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
+    texture.CreateIdAttr('ND_image' + getNodeTypePrefix(outType))
+    texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
+    texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
+    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
+    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
+    textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
+    
+    return textureOutput
+    
+def USD_create_texture_adjust_nodegraph(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureInput:UsdShade.Output) -> UsdShade.Output:
+    #---------------------------------------------------- Create the texture layer
+    texturePath:Path = materialPath.AppendPath(clean_name(xml.get('name')))
+    invert = int(xml.find("channels/invert").get('value'))
+    srcLow = float(xml.find('channels/min').get('value'))
+    srcHigh = float(xml.find('channels/max').get('value'))
+    brightness = float(xml.find('channels/brightness').get('value'))
+    contrast = float(xml.find('channels/contrast').get('value'))
+    swizzling = xml.find('channels/swizzling').get('value') == "1"
+    swizzlingOut = xml.find('channels/rgba').get('value')
 
     #---------------------------------------------------- Create texture adjustments nodegraph
     textureAdjustNodeGraphPath = str(texturePath) + "_adjust"
     textureAdjustNodeGraph = UsdShade.NodeGraph.Define(stage, textureAdjustNodeGraphPath)
-    textureAdjustNodeGraph.CreateInput('texture', outType).ConnectToSource(textureOutput)
+    textureAdjustNodeGraph.CreateInput('texture', outType).ConnectToSource(textureInput)
     textureAdjustNodeGraph.CreateInput('invert', Sdf.ValueTypeNames.Int).Set(invert)
     textureAdjustNodeGraph.CreateInput('outLow', outType).Set(floatToOutType(srcLow, outType))
     textureAdjustNodeGraph.CreateInput('outHigh', outType).Set(floatToOutType(srcHigh, outType))
@@ -1058,21 +1095,25 @@ def createUsdTextureOutput(stage:Usd.Stage, context:ShadingContext, xml:ET.Eleme
         extractChannelShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/channel")
         extractChannelShader.CreateIdAttr("ND_separate4_color4")
         extractChannelShader.CreateInput("in", Sdf.ValueTypeNames.Color4f).ConnectToSource(adjustedTextureOutput)
+        
+        #------------------------------------------------ Change output type to float
+        outType = Sdf.ValueTypeNames.Float
+        
         match swizzlingOut:
             case "red":
-                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outr', Sdf.ValueTypeNames.Float)
+                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outr', outType)
             case "green":
-                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outg', Sdf.ValueTypeNames.Float)
+                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outg', outType)
             case "blue":
-                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outb', Sdf.ValueTypeNames.Float)
+                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outb', outType)
             case "alpha":
-                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outa', Sdf.ValueTypeNames.Float)
+                adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outa', outType)
     
     textureAdjustNodeGraph.CreateOutput('out', outType).ConnectToSource(adjustedTextureOutput)
     
     return textureAdjustNodeGraph.GetOutput('out')
 
-def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+def USD_create_UV_texture_transform(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
     """
     Create a UV texture locator on the given USD stage.
 
@@ -1107,7 +1148,7 @@ def createUVTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdSha
     
     return textureTransformOutput
 
-def create3DTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+def USD_create_3D_texture_transform(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
     """
     Creates a 3D texture locator within a USD stage at the specified path using
     data from an XML element. This function constructs a node graph to handle
@@ -1128,7 +1169,7 @@ def create3DTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdSha
     # maybe someone here can help sort this out
     localMatrix = xml.find('txtrLocator/channels/localMatrix/Matrix4')
     
-    textureLocatorName = cleanName(xml.find('txtrLocator').get('name'))
+    textureLocatorName = clean_name(xml.find('txtrLocator').get('name'))
     nodeGraphPath = path.AppendPath(textureLocatorName)
     localMatrix = xml.find('txtrLocator/channels/localMatrix/Matrix4')
     
@@ -1174,7 +1215,7 @@ def create3DTextureLocator(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdSha
     return textureTransformOutput
     
 # Connect a texture to the relevant shader
-def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, xml:ET.Element) -> UsdShade.Input:
+def USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, xml:ET.Element) -> UsdShade.Input:
     """
     Connects a texture output to a shader input based on the specified effect name.
 
@@ -1197,7 +1238,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
     shader:UsdShade.Shader = context.shader
     advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
     previewShader:UsdShade.Shader = context.previewShader
-    path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')))
+    path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')))
     
     if effectName in usdInputMap['effect'].keys():
         inputName = usdInputMap['effect'][effectName]
@@ -1208,7 +1249,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
                 #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Color3f)
                 textureOutput = output
                 #---------------------------------------------------- Trick : Create invert color and connect to texture
-                path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')+ "_invert_color"))
+                path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')+ "_invert_color"))
                 mathShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
                 mathShader.CreateIdAttr("ND_subtract_float")
                 mathShader.CreateInput("in1", Sdf.ValueTypeNames.Color3f).Set((1.0, 1.0, 1.0))
@@ -1216,7 +1257,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
                 mathShader.CreateOutput('out', Sdf.ValueTypeNames.Color3f)
                 
                 #---------------------------------------------------- Trick : Create math round to set colors to 0 or 1 for modo stencil like
-                path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')+ "_set_0_or_1"))
+                path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')+ "_set_0_or_1"))
                 roundShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
                 roundShader.CreateIdAttr("ND_round_float")
                 roundShader.CreateInput("in", Sdf.ValueTypeNames.Color3f).ConnectToSource(mathShader.GetOutput('out'))
@@ -1234,7 +1275,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
                 bumpHeight = float(advancedMaterialChannels.find("bumpAmp").get("value"))
                 
                 #---------------------------------------------------- Create Normal map and connect to tecture out
-                path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')+ "_bumpMap"))
+                path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')+ "_bumpMap"))
                 normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
                 normalShader.CreateIdAttr("ND_bump_vector3")
                 normalShader.CreateInput("height", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
@@ -1257,7 +1298,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
                 normalHeight = 0.0 #--------------------------------- unfortynately, this value is not given by modo
                 
                 #---------------------------------------------------- Create Normal map and connect to tecture out
-                path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')+ "_normalmap"))
+                path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')+ "_normalmap"))
                 normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
                 normalShader.CreateIdAttr("ND_normalmap")
                 normalShader.CreateInput("in", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
@@ -1279,7 +1320,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
                 displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
                 
                 #---------------------------------------------------- Create Normal map and connect to tecture out
-                path:Path = material.GetPath().AppendPath(cleanName(xml.get('name')+ "_displacement"))
+                path:Path = material.GetPath().AppendPath(clean_name(xml.get('name')+ "_displacement"))
                 displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
                 displacementShader.CreateIdAttr("ND_displacement_float")
                 displacementShader.CreateInput("displacement", Sdf.ValueTypeNames.Float).ConnectToSource(output)
@@ -1294,7 +1335,7 @@ def connectTextureOutputToShaderInput(stage:Usd.Stage, context:ShadingContext, e
         if input.Get() != None:
             return input.ConnectToSource(output)
         else:
-            return createUsdShaderInput(shader, inputName, output, usdTypeMap[inputName])
+            return USD_create_shader_input(shader, inputName, output, usdTypeMap[inputName])
     
     print("⁉️ Effect %s not found in stringMap" % effectName)
     return None
@@ -1389,44 +1430,6 @@ def getMappedChannel(chName:str, itemType:str=None, brdfType:str = None)->str:
     print("Failed finding mapping for channel %s" % chName)
     return None
 
-# Use a filter list to allow or  disallow a channel to be processed (is the filter option is on,
-# some channels are just ignored to make files lighter. Some channels are really not relevant for
-# export but unfiltered outputs are usefull for debugging and figuring what the shaderTree has to offer)
-def isFiltered(chName:str, itemType:str=None):
-    """
-    Determine if a channel is filtered based on its name and item type.
-
-    This function checks if a given channel name is included in the filter
-    list for a specified item type. If no item type is provided, it returns
-    True by default. If the item type is not present in the filters, or if
-    the filter list for the item type is empty, it returns False. Otherwise,
-    it checks if the channel name (before the dot) is in the filter list.
-
-    Parameters:
-        chName (str): The name of the channel to check.
-        itemType (str, optional): The type of item to check against the filters.
-
-    Returns:
-        bool: True if the channel is filtered, False otherwise.
-    """
-    #---------------------------------------------- if no itemType specified, return everything
-    if itemType == None:
-        return True
-    
-    #---------------------------------------------- Ignore if filters has no itemType entry
-    if (itemType not in filters.keys()): return False
-    
-    fMap = filters[itemType]
-    
-    #---------------------------------------------- Ignore if filters has no filter
-    if (len(fMap) == 0):return False
-    
-    #---------------------------------------------- Return channel if has filter
-    if (str(chName).split('.')[0] in fMap):return True
-    
-    #---------------------------------------------- Ignore everything else
-    return False
-
 def floatToOutType(value:float, outType:Sdf.ValueTypeNames):
     """
     Convert a float value to a specified Sdf.ValueTypeNames type.
@@ -1485,7 +1488,7 @@ def copy_and_clean_files():
     based on the `verbose` and `verboseConsolidate` flags.
     """
     
-    consolidatePath = getConsolidatedPath()
+    consolidatePath = get_consolidated_path()
 
     # Create destination path if not existing
     if not os.path.exists(consolidatePath):
@@ -1509,18 +1512,17 @@ def copy_and_clean_files():
             # if file is ùore recent copy it
             if src_mtime > dest_mtime:
                 shutil.copy2(filePath, newPath)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(newPath)} mise à jour")
-                diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)} mise à jour")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(newPath)}] updated")
+                diag("Consolidate", "file", f"Texture : [{os.path.basename(newPath)}] updated")
 
             # Remove current file from existing
-            if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(newPath)} removed form existing files")
-            diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)} removed form existing files")
+            if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(newPath)}] removed form existing files")
             existing_files.pop(existing_files.index(newPath))
             
         else:
             shutil.copy2(filePath, newPath)
-            if (verbose and verboseConsolidate):print(f"🖼️  texture : {os.path.basename(newPath)} copiée")
-            diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)} copiée")
+            if (verbose and verboseConsolidate):print(f"🖼️  texture : [{os.path.basename(newPath)}] copied")
+            diag("Consolidate", "file", f"Texture : [{os.path.basename(newPath)}] copied")
 
     # If files are still present in existing files, they are not useful anymore
     if len(existing_files) > 0:
@@ -1535,24 +1537,24 @@ def copy_and_clean_files():
             # if doesn't exist in the unused folder copy it
             if not os.path.exists(unused_file):
                 shutil.move(os.path.join(consolidatePath, old_file), unused_file)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(old_file)} déplacée dans 'unused'")
-                diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(newPath)}  déplacée dans 'unused'")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(old_file)}] moved to 'unused'")
+                diag("copy_and_clean_files", "file", f"Texture : [{os.path.basename(newPath)}]  moved to 'unused'")
                 
             # If the file already exist in the unused folder, just delete it
             else:
                 os.remove(os.path.join(consolidatePath, old_file))
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : {os.path.basename(old_file)} supprimée, déjà présent dans 'unused'")
-                diag("copy_and_clean_files", "file", f"Texture : {os.path.basename(old_file)} supprimée, déjà présent dans 'unused'")
+                if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(old_file)}] removed (already exists in 'unused')")
+                diag("copy_and_clean_files", "file", f"Texture : [{os.path.basename(old_file)}] removed (already exists in 'unused')")
 
 # Clean the shadertree layers names (remove white space and parenthesis)
-def cleanName(name:str) -> str:
+def clean_name(name:str) -> str:
     originalName = name
     if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
     name = replace_chars(name, ["(", ")"], "")
     name = replace_chars(name, ["(", ")", " ", "-", ".", ":", "#", ";", "?", ","], "_")
     
     if name != originalName:
-        diag("copy_and_clean_files", "file", f"Name : {os.path.basename(originalName)} renamed as {os.path.basename(name)}")
+        diag("Renaming", "Item", f"[{os.path.basename(originalName)}] renamed as [{os.path.basename(name)}]")
     return name
 
 def remove_chars(string, chars_to_remove):
@@ -1563,7 +1565,7 @@ def replace_chars(string: str, chars_to_replace: str, replacement: str) -> str:
     pattern = "[" + re.escape("".join(chars_to_replace)) + "]"
     return re.sub(pattern, replacement, string)
 
-def getConsolidatedPath() -> str:
+def get_consolidated_path() -> str:
     scene = modo.scene.current()
     fileName = basestring(scene.filename).removesuffix(".lxo")
     suffix = fileName.split("/").pop(len(fileName.split("/"))-1)

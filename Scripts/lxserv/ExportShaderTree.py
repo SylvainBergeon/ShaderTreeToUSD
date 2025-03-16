@@ -35,8 +35,6 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
             'USDExport_verboseModifyTree': (True, "USD_Export: Verbose Modify Tree"),
             'USDExport_verboseConsolidate': (True, "USD_Export: Verbose Consolidate"),
             'USDExport_verboseUnsupported': (True, "USD_Export: Verbose Unsupported"),
-            #---------------------------------------------------- Filter options
-            'USDExport_preFilterChannels': (False, "USD_Export: Pre-filter Channels"),
             #---------------------------------------------------- USD options
             'USDExport_exportGlPreviewMaterial': (False, "USD_Export: Export GL Preview Material")
         }
