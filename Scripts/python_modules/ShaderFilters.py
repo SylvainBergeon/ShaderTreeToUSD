@@ -350,6 +350,7 @@ stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "disp":         "displacement",
         }
     }
+
 stdMatChannelMap[lx.symbol.sITYPE_MASK] = {
     "blend":        "",
     "effect":       "",
@@ -362,6 +363,7 @@ stdMatChannelMap[lx.symbol.sITYPE_MASK] = {
     "render":       "",
     "submask":      ""
     }
+
 stdMatChannelMap[lx.symbol.sITYPE_TEXTURELOC] = {
     "uvMap":        "",
     "useUDIM":      "",

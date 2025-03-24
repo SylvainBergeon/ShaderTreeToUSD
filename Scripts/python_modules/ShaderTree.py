@@ -4,26 +4,18 @@ import os, shutil
 import re, sys, math, json
 import lx, modo
 from collections import OrderedDict
-from .ShaderFilters import filters, usdInputMap, usdTypeMap, channelTypeMap, stdMatChannelMap
 from pathlib import Path
 from pxr import Sdf, Usd, UsdShade, UsdGeom
+
+from .ShaderFilters import usdInputMap
+from .ShaderFilters import usdTypeMap
+from .ShaderFilters import channelTypeMap
+from .ShaderFilters import stdMatChannelMap
 
 try:
     import xml.etree.cElementTree as ET
 except ImportError:
     import xml.etree.ElementTree as ET
-
-try:
-    from importlib import reload
-except ImportError:
-    from imp import reload
-
-def reload_modules():
-    reload(filters)
-    reload(usdInputMap)
-    reload(usdTypeMap)
-    reload(channelTypeMap)
-    reload(stdMatChannelMap)
     
 # Fix Python 3 issues
 if sys.version_info[0] == 3:
@@ -134,6 +126,7 @@ def export_basic_execute(Cmd_obj, msg):
         Cmd_obj: The command object, not used in this function.
         msg: The message object, not used in this function.
     """
+
     global xmlDiag
     if export_diagnostic:
         xmlDiag = ET.Element("diagnostic")
@@ -565,7 +558,21 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
     
                 #---------------------------------------------------- Add output to the current effect stack in context
                 context = addShaderConnectorToContext(xml, textureOutput, context)
+
+        # case "constant":
+        #     material:UsdShade.Material = context.material
+        #     shader:UsdShade.Shader = context.shader
             
+        #     if xml.find('channels/enable').get('value') == "1":
+        #         effectName = xml.find('channels/effect').get('value')
+        #         materialPath = material.GetPath()
+                
+        #         if (verbose and verboseModifyTree):print("✅ Create CONSTANT at %s as %s" % (path, effectName))
+        #         diag("USD_Create", xml.tag, f"Create CONSTANT at [{path}] as [{effectName}]")
+                
+        #         textureOutput = USD_create_constant(stage, materialPath, xml)
+            
+
         #------------------------------------------------------- If material, create shader at defined path
         case 'advancedMaterial':
             # -------------------------------------------------- if has no context, then do nothing, as it's probably a shader that's outside a mask
@@ -591,6 +598,9 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
             diag("Unsupported", "Item_Type", f"[{elementName}] is not yet supported (ignored)")
  
     return context
+
+def USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:
+    pass
 
 def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
     #---------------------------------------------------- Create texture definition even if modo layer is disabled
