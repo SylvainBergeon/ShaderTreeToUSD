@@ -65,22 +65,23 @@ export_xml = None
 export_usda = None
 export_diagnostic = None
 verbose = None
-verboseSetValue = None
-verboseCreateShader = None
-verboseOverrideValue = None
-verboseModifyTree = None
-verboseConsolidate = None
-verboseUnsupported = None
+verbose_set_value = None
+verbose_create_shader = None
+verbose_override_value = None
+verbose_modify_tree = None
+verbose_consolidate = None
+verbose_unsupported = None
 export_diagnostic = None
-xmlDiag = None
+
+xml_diagnostic = None
 
 def diag(sectionName:str, diagElementName:str, diagtext:str):
     if not export_diagnostic: return
        
-    section = xmlDiag.find(sectionName)
+    section = xml_diagnostic.find(sectionName)
     if section is None:
         section = ET.Element(sectionName)
-        xmlDiag.append(section)
+        xml_diagnostic.append(section)
         
     diagElement = ET.Element(diagElementName)
     diagElement.text = diagtext
@@ -91,9 +92,9 @@ def initialize_preferences():
     """Initialize global variables with user preferences."""
     global consolidateScene, exportGlPreviewMaterial
     global export_json, export_xml, export_usda, export_diagnostic
-    global verbose, verboseSetValue, verboseCreateShader
-    global verboseOverrideValue, verboseModifyTree
-    global verboseConsolidate, verboseUnsupported
+    global verbose, verbose_set_value, verbose_create_shader
+    global verbose_override_value, verbose_modify_tree
+    global verbose_consolidate, verbose_unsupported
 
     consolidateScene = lx.eval('user.value USDExport_consolidateScene ?')
     exportGlPreviewMaterial = lx.eval('user.value USDExport_exportGlPreviewMaterial ?')
@@ -102,12 +103,12 @@ def initialize_preferences():
     export_usda = lx.eval('user.value USDExport_export_usda ?')
     export_diagnostic = lx.eval('user.value USDExport_saveDiagnostic ?')
     verbose = lx.eval('user.value USDExport_verbose ?')
-    verboseSetValue = lx.eval('user.value USDExport_verboseSetValue ?')
-    verboseCreateShader = lx.eval('user.value USDExport_verboseCreateShader ?')
-    verboseOverrideValue = lx.eval('user.value USDExport_verboseOverrideValue ?')
-    verboseModifyTree = lx.eval('user.value USDExport_verboseModifyTree ?')
-    verboseConsolidate = lx.eval('user.value USDExport_verboseConsolidate ?')
-    verboseUnsupported = lx.eval('user.value USDExport_verboseUnsupported ?')
+    verbose_set_value = lx.eval('user.value USDExport_verboseSetValue ?')
+    verbose_create_shader = lx.eval('user.value USDExport_verboseCreateShader ?')
+    verbose_override_value = lx.eval('user.value USDExport_verboseOverrideValue ?')
+    verbose_modify_tree = lx.eval('user.value USDExport_verboseModifyTree ?')
+    verbose_consolidate = lx.eval('user.value USDExport_verboseConsolidate ?')
+    verbose_unsupported = lx.eval('user.value USDExport_verboseUnsupported ?')
     
 # Call this function at the start of your script or before using the preferences
 initialize_preferences()
@@ -127,42 +128,42 @@ def export_basic_execute(Cmd_obj, msg):
         msg: The message object, not used in this function.
     """
 
-    global xmlDiag
+    global xml_diagnostic
     if export_diagnostic:
-        xmlDiag = ET.Element("diagnostic")
+        xml_diagnostic = ET.Element("diagnostic")
     
     scene = modo.scene.current()
-    fileName = basestring(scene.filename).removesuffix(".lxo")
-    diag("Files", "Set", f"filename = {os.path.basename(fileName)}.lxo")
-    diag("Files", "Set", f"project path = {os.path.dirname(fileName)}")
+    filename = basestring(scene.filename).removesuffix(".lxo")
+    diag("Files", "Set", f"filename = {os.path.basename(filename)}.lxo")
+    diag("Files", "Set", f"project path = {os.path.dirname(filename)}")
 
-    rendererId = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
-    renderer = scene.item(rendererId)
+    renderer_id = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
+    renderer = scene.item(renderer_id)
     
-    xmlShaderTree = xmlExportItem(renderer)
+    xml_shadertree = xmlExportItem(renderer)
 
     #----------- Write files
     #----------- as Json
-    jsonShaderTree = jsonExportItem(renderer)
-    if export_json: writeJson(fileName, jsonShaderTree)
+    json_shadertree = jsonExportItem(renderer)
+    if export_json: writeJson(filename, json_shadertree)
 
     #----------- as XML
-    if export_xml: writeXml(fileName, xmlShaderTree)
+    if export_xml: write_xml(filename, xml_shadertree)
     
     #----------- as usda
-    if export_usda: writeUsda(fileName, xmlShaderTree)
+    if export_usda: write_usda(filename, xml_shadertree)
     
     #----------- Write diadnostic file
     if export_diagnostic:
-        ET.indent(xmlDiag, space="   ")
-        xmlString = ET.tostring(xmlDiag, method="xml", xml_declaration=True).decode()
-        fout = open(fileName + "_diagnostic.xml",'w') 
+        ET.indent(xml_diagnostic, space="   ")
+        xmlString = ET.tostring(xml_diagnostic, method="xml", xml_declaration=True).decode()
+        fout = open(filename + "_diagnostic.xml",'w') 
         fout.write(xmlString)
         fout.close()
-        del xmlDiag
+        del xml_diagnostic
         
 # Write the data as XML
-def writeXml(fileName, xml:ET.Element):
+def write_xml(fileName, xml:ET.Element):
     ET.indent(xml, space="   ")
     xmlString = ET.tostring(xml, method="xml", xml_declaration=True).decode()
     fout = open(fileName + ".xml",'w') 
@@ -172,7 +173,7 @@ def writeXml(fileName, xml:ET.Element):
     diag("Files", "Save", f"{os.path.basename(fileName)}.xml saved succesfully !")
 
 # Write the data as USDA
-def writeUsda(filename:str, xml:ET.Element):
+def write_usda(filename:str, xml:ET.Element):
     print("saving usd ...")
     
     stage = Usd.Stage.CreateNew(filename + '.usda')
@@ -471,7 +472,7 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
                 
                 if ptag != "":
                     newpath = path + "/" + clean_name(ptag)
-                    if (verbose and verboseModifyTree):print("✅ Create MASK at [%s]" % (newpath))
+                    if (verbose and verbose_modify_tree):print("✅ Create MASK at [%s]" % (newpath))
                     diag("USD_Create", xml.tag, f"Create MASK at [{newpath}]")
                     #---------------------------------------------------- Create material definition
                     material = UsdShade.Material.Define(stage, newpath)
@@ -479,7 +480,7 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
                 
                 else:
                     newpath = path + "/" +  clean_name(xml.get('name'))
-                    if (verbose and verboseModifyTree):print("✅ Create SCOPE at [%s]" % (newpath))
+                    if (verbose and verbose_modify_tree):print("✅ Create SCOPE at [%s]" % (newpath))
                     diag("USD_Create", xml.tag, f"Create SCOPE at [{newpath}]")
                     #---------------------------------------------------- Create sub scope definition
                     UsdGeom.Scope.Define(stage, newpath)
@@ -530,7 +531,7 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
                 effectName = xml.find('channels/effect').get('value')
                 sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
                 
-                if (verbose and verboseModifyTree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
+                if (verbose and verbose_modify_tree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
                 diag("USD_Create", xml.tag, f"Create IMAGEMAP at [{path}] as [{effectName}]")
                 
                 textureOutput:UsdShade.Output = USD_create_texture_output(stage, context, xml, sdfType)
@@ -547,7 +548,7 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
                 effectName = xml.find('channels/effect').get('value')
                 materialPath = material.GetPath()
                 
-                if (verbose and verboseModifyTree):print("✅ Create 3D NOISE at %s as %s" % (path, effectName))
+                if (verbose and verbose_modify_tree):print("✅ Create 3D NOISE at %s as %s" % (path, effectName))
                 diag("USD_Create", xml.tag, f"Create 3D NOISE at [{path}] as [{effectName}]")
                 
                 texLocatorOutput = USD_create_3D_texture_transform(stage, materialPath, xml)
@@ -559,18 +560,22 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
                 #---------------------------------------------------- Add output to the current effect stack in context
                 context = addShaderConnectorToContext(xml, textureOutput, context)
 
-        # case "constant":
-        #     material:UsdShade.Material = context.material
-        #     shader:UsdShade.Shader = context.shader
+        case "constant":
+            material:UsdShade.Material = context.material
+            shader:UsdShade.Shader = context.shader
             
-        #     if xml.find('channels/enable').get('value') == "1":
-        #         effectName = xml.find('channels/effect').get('value')
-        #         materialPath = material.GetPath()
+            if xml.find('channels/enable').get('value') == "1":
+                effectName = xml.find('channels/effect').get('value')
+                sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
+                materialPath = material.GetPath()
                 
-        #         if (verbose and verboseModifyTree):print("✅ Create CONSTANT at %s as %s" % (path, effectName))
-        #         diag("USD_Create", xml.tag, f"Create CONSTANT at [{path}] as [{effectName}]")
+                if (verbose and verbose_modify_tree):print("✅ Create CONSTANT at %s as %s" % (path, effectName))
+                diag("USD_Create", xml.tag, f"Create CONSTANT at [{path}] as [{effectName}]")
                 
-        #         textureOutput = USD_create_constant(stage, materialPath, xml)
+                constantOutput = USD_create_constant(stage, materialPath, xml, sdfType)
+                
+                #---------------------------------------------------- Add output to the current effect stack in context
+                context = addShaderConnectorToContext(xml, constantOutput, context)
             
 
         #------------------------------------------------------- If material, create shader at defined path
@@ -579,7 +584,7 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
             if context.material is None: return context
             
             material:UsdShade.Material = context.material
-            if (verbose and verboseModifyTree):print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
+            if (verbose and verbose_modify_tree):print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
             diag("USD_Create", xml.tag, f"Create ADVANCED MATERIAL at {material.GetPath()}")
             #---------------------------------------------------- Create material definition
             shader = USD_create_shader(stage, material, xml, False)
@@ -594,13 +599,19 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
             pass
         
         case _:
-            if(verbose and verboseUnsupported): print(f"❎ Unsupported: {elementName} item type is not yet supported")
+            if(verbose and verbose_unsupported): print(f"❎ Unsupported: {elementName} item type is not yet supported")
             diag("Unsupported", "Item_Type", f"[{elementName}] is not yet supported (ignored)")
  
     return context
 
-def USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:
-    pass
+def USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output: 
+    #---------------------------------------------------- Create texture definition even if modo layer is disabled
+    constantPath:Path = path.AppendPath(clean_name(xml.get('name')))
+    constantShader = UsdShade.Shader.Define(stage, constantPath)
+    constantShader.CreateIdAttr("ND_constant" + getNodeTypePrefix(outType))
+    output:UsdShade.Output = constantShader.CreateOutput("out", outType)
+    
+    return output
 
 def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
     #---------------------------------------------------- Create texture definition even if modo layer is disabled
@@ -653,11 +664,11 @@ def USD_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
     
     texturePath = str(path) + "/" + name
     
-    if verbose and verboseModifyTree: print(f"✅ CONNECT: {input} x {opacity} -> {blend} -> {connector.name}")
+    if verbose and verbose_modify_tree: print(f"✅ CONNECT: {input} x {opacity} -> {blend} -> {connector.name}")
     
     #----------------------------------------------------- If blend effect not supported
     if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
-        if verbose and verboseUnsupported: print(f"❎ Unsupported: {blend} blend effect is not yet supported")
+        if verbose and verbose_unsupported: print(f"❎ Unsupported: {blend} blend effect is not yet supported")
         diag("Unsupported", "Blend_Mode", f"[{blend}] in {texturePath} is not yet supported (ignored)")
         return output
     
@@ -778,14 +789,14 @@ def USD_create_shader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Elemen
         connectorOut = "surface"
         materialConnector = ""
         surfaceId = "UsdPreviewSurface"
-        if (verbose and verboseCreateShader) :print ("✅ Create PREVIEW SHADER at : %s" % path)
+        if (verbose and verbose_create_shader) :print ("✅ Create PREVIEW SHADER at : %s" % path)
         diag("createUsdShader", xml.get('name'), "Create PREVIEW SHADER at : %s" % path)
     else:
         brdfType = xml.find('channels/brdfType').get('value')
         connectorOut = 'surface'
         materialConnector = "mtlx:"
         surfaceId = "ND_standard_surface_surfaceshader"
-        if (verbose and verboseCreateShader) :print ("✅ Create SHADER at : %s" % path)
+        if (verbose and verbose_create_shader) :print ("✅ Create SHADER at : %s" % path)
         diag("createUsdShader", xml.get('name'), "Create SHADER at : %s" % path)
     
         
@@ -917,14 +928,14 @@ def applyOverrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element
                     usdValue = str((sheenTint, sheenTint, sheenTint))
    
     if  usdValue != originalValue:
-        if (verbose and verboseOverrideValue):print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
+        if (verbose and verbose_override_value):print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
         diag("applyOverrides", f"{xml.get('name')}", f"{modoInputName} from {originalValue} to {usdValue}")
     return usdValue
 
 # Create USD Shader input according to modo channel scopped
 def USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input: 
     if usdInputName != None and type(usdValue) != None:
-        if (verbose and verboseSetValue):print("🔁 SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
+        if (verbose and verbose_set_value):print("🔁 SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))
         if type(usdValue) is UsdShade.Output:
             return shaderRef.CreateInput(usdInputName, sdfType).ConnectToSource(usdValue)
         else :
@@ -990,7 +1001,7 @@ def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.El
             textureOutput = USD_create_triplanar_texture(stage, materialPath, xml, outType, textureTransformOutput)
             
         case _:
-            if(verbose and verboseUnsupported): print(f"❎ Unsupported: {projType} projection type is not yet supported (switched to default UV)")
+            if(verbose and verbose_unsupported): print(f"❎ Unsupported: {projType} projection type is not yet supported (switched to default UV)")
             diag("Unsupported", "Projection_Type", f"[{projType}] in {texturePath} is not yet supported (switched to default UV)")
             #---------------------------------------------------- Create the UV texture transform node
             textureTransformOutput = USD_create_UV_texture_transform(stage, materialPath, xml)
@@ -1522,16 +1533,16 @@ def copy_and_clean_files():
             # if file is ùore recent copy it
             if src_mtime > dest_mtime:
                 shutil.copy2(filePath, newPath)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(newPath)}] updated")
+                if (verbose and verbose_consolidate):print(f"🖼️ Texture : [{os.path.basename(newPath)}] updated")
                 diag("Consolidate", "file", f"Texture : [{os.path.basename(newPath)}] updated")
 
             # Remove current file from existing
-            if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(newPath)}] removed form existing files")
+            if (verbose and verbose_consolidate):print(f"🖼️ Texture : [{os.path.basename(newPath)}] removed form existing files")
             existing_files.pop(existing_files.index(newPath))
             
         else:
             shutil.copy2(filePath, newPath)
-            if (verbose and verboseConsolidate):print(f"🖼️  texture : [{os.path.basename(newPath)}] copied")
+            if (verbose and verbose_consolidate):print(f"🖼️  texture : [{os.path.basename(newPath)}] copied")
             diag("Consolidate", "file", f"Texture : [{os.path.basename(newPath)}] copied")
 
     # If files are still present in existing files, they are not useful anymore
@@ -1547,13 +1558,13 @@ def copy_and_clean_files():
             # if doesn't exist in the unused folder copy it
             if not os.path.exists(unused_file):
                 shutil.move(os.path.join(consolidatePath, old_file), unused_file)
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(old_file)}] moved to 'unused'")
+                if (verbose and verbose_consolidate):print(f"🖼️ Texture : [{os.path.basename(old_file)}] moved to 'unused'")
                 diag("copy_and_clean_files", "file", f"Texture : [{os.path.basename(newPath)}]  moved to 'unused'")
                 
             # If the file already exist in the unused folder, just delete it
             else:
                 os.remove(os.path.join(consolidatePath, old_file))
-                if (verbose and verboseConsolidate):print(f"🖼️ Texture : [{os.path.basename(old_file)}] removed (already exists in 'unused')")
+                if (verbose and verbose_consolidate):print(f"🖼️ Texture : [{os.path.basename(old_file)}] removed (already exists in 'unused')")
                 diag("copy_and_clean_files", "file", f"Texture : [{os.path.basename(old_file)}] removed (already exists in 'unused')")
 
 # Clean the shadertree layers names (remove white space and parenthesis)
