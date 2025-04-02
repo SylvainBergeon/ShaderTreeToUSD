@@ -7,6 +7,8 @@ from collections import OrderedDict
 from pathlib import Path
 from pxr import Sdf, Usd, UsdShade, UsdGeom
 
+print(Sdf)
+
 from .ShaderFilters import usdInputMap
 from .ShaderFilters import usdTypeMap
 from .ShaderFilters import channelTypeMap
@@ -49,6 +51,7 @@ class shaderConnector:
     output:UsdShade.Output
     opacity:float
     blend:str
+    path:str
     
     def dump(_self) -> str:
         return (f"{_self.name} {_self.output.GetBaseName()} {_self.blend} {_self.opacity}")
@@ -507,14 +510,17 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
                 
                 #-------------------------------------------------------- Connect child effects together
                 USD_connect_effect_stack(stage, context, path, name)
+    
+                #-------------------------------------------------------- Reset stacks
+                context.effectsStack = OrderedDict()
             
         #------------------------------------------------------- If imageMap, set USD graph with adjustments based on still image properties and effects
         case "imageMap":
+            name = UTIL_clean_name(xml.get('name'))
             material:UsdShade.Material = context.material
+            path:Path = material.GetPath().AppendPath(name)
             shader:UsdShade.Shader = context.shader
             previewShader:UsdShade.Shader = context.previewShader
-            name = UTIL_clean_name(xml.get('name'))
-            path:Path = material.GetPath().AppendPath(name)
             
             #---------------------------------------------------- Connect texture to shader and previewShader inputs if possible
             if xml.find('channels/enable').get('value') == "1":
@@ -628,7 +634,7 @@ def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocator
     
     return noiseShader.CreateOutput("out", Sdf.ValueTypeNames.Float)
     
-def USD_connect_operator(stage, path:str, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
+def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
     """
     Connects a shader output to a specified input using a blend operator.
 
@@ -651,6 +657,7 @@ def USD_connect_operator(stage, path:str, connector:shaderConnector, input:UsdSh
     opacity:float = connector.opacity
     output:UsdShade.Output = connector.output
     outType = output.GetTypeName()
+    path = connector.path
     
     texturePath = str(path) + "/" + name
     
@@ -734,16 +741,14 @@ def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, 
         #----------------------------------------------------- Create connections
         for connectorIndex in range(0, len(context.effectsStack[effectName])):
             connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
+            
             # Create the connector nodes, connect the previous output and expose the new output
-            output = USD_connect_operator(stage, path, connector, output)
+            output = USD_connect_operator(stage, connector, output)
     
         #---------------------------------------------------- Connect the latest exposed output to the shader input corresponding to the current effect
         USD_connect_texture_output_to_shader_input(stage, context, effectName, output, name)
         
         return output
-    
-    #-------------------------------------------------------- Reset stacks
-    context.effectsStack = OrderedDict()
     
 def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, context:ShadingContext) -> ShadingContext:
     """
@@ -767,6 +772,12 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
     Returns:
         ShadingContext: The updated shading context with the new shader connector added.
     """
+    
+    
+    material:UsdShade.Material = context.material
+    name = UTIL_clean_name(xml.get('name'))
+    path:Path = material.GetPath().AppendPath(name)
+    
     #----------------------------------------------------------- create effectStack if doesn't exist yet for this effect
     if xml.find("channels/effect") != None:
         effectName = xml.find("channels/effect").get("value")
@@ -776,6 +787,7 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
         #----------------------------------------------------------- Set values for the shaderConnection
         shaderConnection = shaderConnector()
         shaderConnection.name = xml.get("name")
+        shaderConnection.path = path
         shaderConnection.output = output
         shaderConnection.blend = xml.find("channels/blend").get("value")
         shaderConnection.opacity = float(xml.find("channels/opacity").get("value"))
@@ -1080,6 +1092,11 @@ def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.El
 def USD_create_triplanar_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
     texturePath:Path = materialPath.AppendPath(UTIL_clean_name(xml.get('name')))
     textureFilePath = xml.find('videoStill/channels/filename').get('value')
+    
+    #------------------------------------------------------ Override texture filepath with $HIP consolidated path
+    if consolidateScene: textureFilePath = UTIL_get_consolidated_relative_path(textureList[textureFilePath])
+    
+    print(textureFilePath)
 
     #---------------------------------------------------- Create the geometry normal node
     geometryNormal:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_geoNormal")
@@ -1106,6 +1123,11 @@ def USD_create_triplanar_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Elem
 def USD_create_UV_texure(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
     texturePath:Path = materialPath.AppendPath(UTIL_clean_name(xml.get('name')))
     textureFilePath = xml.find('videoStill/channels/filename').get('value')
+    
+    #------------------------------------------------------ Override texture filepath with $HIP consolidated path
+    if consolidateScene: textureFilePath = UTIL_get_consolidated_relative_path(textureList[textureFilePath])
+    
+    print(textureFilePath)
     
     texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
     texture.CreateIdAttr('ND_image' + UTIL_get_node_type_prefix(outType))
@@ -1686,3 +1708,11 @@ def UTIL_get_consolidated_path() -> str:
     suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
     projectPath = basestring(fileName).removesuffix(suffix)
     return projectPath + suffix + "_textures"
+
+def UTIL_get_consolidated_relative_path(path:str) -> str:
+    scene = modo.scene.current()
+    fileName = basestring(scene.filename).removesuffix(".lxo")
+    print(fileName)
+    suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
+    print (suffix)
+    return "./" + suffix + "_textures/" + os.path.basename(path)
