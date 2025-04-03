@@ -661,7 +661,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     
     texturePath = str(path) #+ "/" + name
     
-    if verbose and verbose_modify_tree: print(f"✅ CONNECT: {input} x {opacity} -> {blend} -> {connector.name}")
+    if verbose and verbose_modify_tree: print(f"✅ CONNECT {path}: {input} x {opacity} -> {blend} -> {name}")
     
     #----------------------------------------------------- If blend effect not supported
     if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
@@ -724,12 +724,19 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     return output
 
 def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, name:str)->UsdShade.Output:
+    
+    output:UsdShade.Output = None
+    
     for effectName in context.effectsStack.keys():
+        print(f"effectName found {effectName}")
         
+    for effectName in context.effectsStack.keys():
+        print(f"treating : {effectName}")
         # ////////////////////////////////// WEAK - Should be better too use a dedicated mapping table with default value or something
         #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
         usdInputName = usdInputMap['effect'][effectName]
         modoInputName = UTIL_get_key_from_value(stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL]['principled'], usdInputName)
+        
         if context.advancedMaterialChannels.find(modoInputName) != None:
             materialInputValue = context.advancedMaterialChannels.find(modoInputName).get('value')
         else:
@@ -741,6 +748,7 @@ def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, 
         #----------------------------------------------------- Create connections
         for connectorIndex in range(0, len(context.effectsStack[effectName])):
             connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
+            print(connector.name)
             
             # Create the connector nodes, connect the previous output and expose the new output
             output = USD_connect_operator(stage, connector, output)
@@ -748,7 +756,7 @@ def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, 
         #---------------------------------------------------- Connect the latest exposed output to the shader input corresponding to the current effect
         USD_connect_texture_output_to_shader_input(stage, context, effectName, output, name)
         
-        return output
+    return output
     
 def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, context:ShadingContext) -> ShadingContext:
     """
@@ -779,7 +787,8 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
     path:Path = material.GetPath().AppendPath(name)
     
     #----------------------------------------------------------- create effectStack if doesn't exist yet for this effect
-    if xml.find("channels/effect") != None:
+    effectName:str = xml.find("channels/effect")
+    if effectName != None:
         effectName = xml.find("channels/effect").get("value")
         if not effectName in context.effectsStack.keys():
             context.effectsStack[effectName] = []
@@ -794,6 +803,13 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
         
         #----------------------------------------------------------- Add this connector to the stack
         context.effectsStack[effectName].append(shaderConnection)
+        
+        if verbose and verbose_create_shader: print(f"❎ Stacked connector: {name} as {effectName}")
+        diag("USD_Connect", xml.tag, f"Stacked connector: {name} as {effectName}")
+        
+    else:
+        if verbose and verbose_unsupported: print(f"❎ Unsupported: {effectName} effect is not yet supported")
+        diag("Unsupported", "Effect", f"[{effectName}] in {path} is not yet supported (ignored)")
         
     return context
     
@@ -1708,7 +1724,5 @@ def UTIL_get_consolidated_path() -> str:
 def UTIL_get_consolidated_relative_path(path:str) -> str:
     scene = modo.scene.current()
     fileName = basestring(scene.filename).removesuffix(".lxo")
-    print(fileName)
     suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
-    print (suffix)
     return "./" + suffix + "_textures/" + os.path.basename(path)
