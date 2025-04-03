@@ -659,7 +659,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     outType = output.GetTypeName()
     path = connector.path
     
-    texturePath = str(path) + "/" + name
+    texturePath = str(path) #+ "/" + name
     
     if verbose and verbose_modify_tree: print(f"✅ CONNECT: {input} x {opacity} -> {blend} -> {connector.name}")
     
@@ -672,7 +672,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     match blend:
         case lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY | lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE:
             #----------------------------------------------------- Set effect blend operator
-            operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend")
+            operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
             usdOperatorName = usdInputMap["blend"][blend] + UTIL_get_node_type_prefix(outType)
             operator.CreateIdAttr(usdOperatorName)
             operator.CreateInput('in1', output.GetTypeName()).ConnectToSource(output)
@@ -686,7 +686,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
             output = operator.CreateOutput('out', outType)
             
             #----------------------------------------------------- set opacity as mix
-            operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_amount")
+            operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_mix")
             usdOperatorName = "ND_mix" + UTIL_get_node_type_prefix(outType)
             operator.CreateIdAttr(usdOperatorName)
             operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
@@ -704,7 +704,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
             
         case _:
             #----------------------------------------------------- Set effect blend operator and opacity as mix
-            operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend")
+            operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
             usdOperatorName = usdInputMap["blend"][blend] + UTIL_get_node_type_prefix(outType)
             operator.CreateIdAttr(usdOperatorName)
             operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
@@ -1095,8 +1095,6 @@ def USD_create_triplanar_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Elem
     
     #------------------------------------------------------ Override texture filepath with $HIP consolidated path
     if consolidateScene: textureFilePath = UTIL_get_consolidated_relative_path(textureList[textureFilePath])
-    
-    print(textureFilePath)
 
     #---------------------------------------------------- Create the geometry normal node
     geometryNormal:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_geoNormal")
@@ -1126,8 +1124,6 @@ def USD_create_UV_texure(stage:Usd.Stage, materialPath:Path, xml:ET.Element, out
     
     #------------------------------------------------------ Override texture filepath with $HIP consolidated path
     if consolidateScene: textureFilePath = UTIL_get_consolidated_relative_path(textureList[textureFilePath])
-    
-    print(textureFilePath)
     
     texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
     texture.CreateIdAttr('ND_image' + UTIL_get_node_type_prefix(outType))
