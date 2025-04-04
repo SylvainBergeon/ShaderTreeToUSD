@@ -661,7 +661,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     
     texturePath = str(path) #+ "/" + name
     
-    if verbose and verbose_modify_tree: print(f"✅ CONNECT {path}: {input} x {opacity} -> {blend} -> {name}")
+    if verbose and verbose_modify_tree: print(f"✅ CONNECT {name}: {input} x {opacity} -> {blend} -> OUT")
     
     #----------------------------------------------------- If blend effect not supported
     if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
@@ -726,12 +726,8 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
 def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, name:str)->UsdShade.Output:
     
     output:UsdShade.Output = None
-    
-    for effectName in context.effectsStack.keys():
-        print(f"effectName found {effectName}")
         
     for effectName in context.effectsStack.keys():
-        print(f"treating : {effectName}")
         # ////////////////////////////////// WEAK - Should be better too use a dedicated mapping table with default value or something
         #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
         usdInputName = usdInputMap['effect'][effectName]
@@ -748,7 +744,6 @@ def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, 
         #----------------------------------------------------- Create connections
         for connectorIndex in range(0, len(context.effectsStack[effectName])):
             connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
-            print(connector.name)
             
             # Create the connector nodes, connect the previous output and expose the new output
             output = USD_connect_operator(stage, connector, output)
@@ -1716,13 +1711,8 @@ def UTIL_replace_chars(string: str, chars_to_replace: str, replacement: str) -> 
 
 def UTIL_get_consolidated_path() -> str:
     scene = modo.scene.current()
-    fileName = basestring(scene.filename).removesuffix(".lxo")
-    suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
-    projectPath = basestring(fileName).removesuffix(suffix)
-    return projectPath + suffix + "_textures"
+    return basestring(scene.filename).removesuffix(".lxo") + "_textures"
 
 def UTIL_get_consolidated_relative_path(path:str) -> str:
     scene = modo.scene.current()
-    fileName = basestring(scene.filename).removesuffix(".lxo")
-    suffix = fileName.split("/").pop(len(fileName.split("/"))-1)
-    return "./" + suffix + "_textures/" + os.path.basename(path)
+    return os.path.join(".", os.path.basename(scene.filename).removesuffix(".lxo"), os.path.basename(path))
