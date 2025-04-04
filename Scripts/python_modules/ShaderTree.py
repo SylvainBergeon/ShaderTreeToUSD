@@ -156,18 +156,18 @@ def export_basic_execute(Cmd_obj, msg):
     renderer_id = scene.items(lx.symbol.sITYPE_POLYRENDER)[0].id
     renderer = scene.item(renderer_id)
     
-    xml_shadertree = xmlExportItem(renderer)
+    xml_shadertree = XML_export_item(renderer)
 
     #----------- Write files
     #----------- as Json
-    json_shadertree = jsonExportItem(renderer)
-    if export_json: writeJson(filename, json_shadertree)
+    json_shadertree = JSON_export_item(renderer)
+    if export_json: JSON_write_file(filename, json_shadertree)
 
     #----------- as XML
-    if export_xml: write_xml(filename, xml_shadertree)
+    if export_xml: XML_write_file(filename, xml_shadertree)
     
     #----------- as usda
-    if export_usda: write_usda(filename, xml_shadertree)
+    if export_usda: USD_write_file(filename, xml_shadertree)
     
     #----------- Write diadnostic file
     if export_diagnostic:
@@ -177,9 +177,12 @@ def export_basic_execute(Cmd_obj, msg):
         fout.write(xmlString)
         fout.close()
         del xml_diagnostic
-        
+
+
+#////////////////////////////////////// XML
+   
 # Write the data as XML
-def write_xml(fileName, xml:ET.Element):
+def XML_write_file(fileName, xml:ET.Element):
     ET.indent(xml, space="   ")
     xmlString = ET.tostring(xml, method="xml", xml_declaration=True).decode()
     fout = open(fileName + ".xml",'w') 
@@ -188,35 +191,8 @@ def write_xml(fileName, xml:ET.Element):
     
     diag("Files", "Save", f"{os.path.basename(fileName)}.xml saved succesfully !")
 
-# Write the data as USDA
-def write_usda(filename:str, xml:ET.Element):
-    print("saving usd ...")
-    
-    stage = Usd.Stage.CreateNew(filename + '.usda')
-    
-    context = ShadingContext()
-    context = USD_export_shadertree(stage, "/shadertree", context, xml)
-    
-    stage.GetRootLayer().Save()
-    print("✅ USD saved")
-    diag("Files", "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
-    
-    #----------- consolidate scene
-    if consolidateScene:
-        UTIL_copy_and_clean_files()
-        print("✅ Scene consolidated")
-        diag("Files", "Save", f"Consolidation succesful !")
-
-# Write the data as JSON
-def writeJson(filename, dictionary):
-    with open(filename + ".json", 'w') as fout:
-        json.dump(dictionary, fout, indent=1)
-        fout.flush()
-        
-    diag("Files", "Save", f"{os.path.basename(filename)}.xm saved succesfully !")
-
 # Recursively convert the shader tree structure to xml
-def xmlExportItem(item:modo.Item):
+def XML_export_item(item:modo.Item):
     """
     Exports a modo item and its hierarchy to an XML element.
 
@@ -254,26 +230,26 @@ def xmlExportItem(item:modo.Item):
             for fwdItem in graph.forward(item.name):
                 match fwdItem.type:
                     case lx.symbol.sITYPE_VIDEOSTILL: #----- Extract image file channels as xml element
-                        out_xml.append(xmlExportItem(fwdItem))
+                        out_xml.append(XML_export_item(fwdItem))
                     
                     case lx.symbol.sITYPE_TEXTURELOC: #----- Extract texture locator channels as xml element
-                        out_xml.append(xmlExportItem(fwdItem))
+                        out_xml.append(XML_export_item(fwdItem))
     
     #------------------------------- Export channels
     if len(item.channels()) > 0:
-        channels = xmlGetChannels(item)
+        channels = XML_get_channels(item)
         out_xml.append(channels)
         
     #------------------------------- Export childs
     numChild = item.childCount()
     for i in range(numChild):
         itemChild = item.childAtIndex(i)
-        out_xml.append(xmlExportItem(itemChild))
+        out_xml.append(XML_export_item(itemChild))
         
     return out_xml
 
 # Grab all channels of an items and write it as separate xml elements in a channels structure
-def xmlGetChannels(item:modo.Item):
+def XML_get_channels(item:modo.Item):
     """
     Generate an XML representation of the channels of a given modo item.
 
@@ -295,7 +271,7 @@ def xmlGetChannels(item:modo.Item):
     #------------------------------- Export channels
     if len(item.channels()) > 0:
         
-        channelsDict:OrderedDict = getChannels(item)
+        channelsDict:OrderedDict = JSON_get_channels(item)
         for chName in channelsDict:
             xmlChan = ET.Element(chName)
             
@@ -315,8 +291,20 @@ def xmlGetChannels(item:modo.Item):
     
     return xml_out
 
+
+
+#////////////////////////////////////// JSON
+
+# Write the data as JSON
+def JSON_write_file(filename, dictionary):
+    with open(filename + ".json", 'w') as fout:
+        json.dump(dictionary, fout, indent=1)
+        fout.flush()
+        
+    diag("Files", "Save", f"{os.path.basename(filename)}.xm saved succesfully !")
+
 # Recursively convert the shader tree structure to a Dict struccture (for json exoport)
-def jsonExportItem(item:modo.Item):
+def JSON_export_item(item:modo.Item):
     """
     Exports a modo item and its hierarchy to a JSON-compatible dictionary.
 
@@ -340,17 +328,17 @@ def jsonExportItem(item:modo.Item):
     
     #------------------------------- Export channels
     if len(item.channels()) > 0:
-        out_dict["channels"] = getChannels(item)
+        out_dict["channels"] = JSON_get_channels(item)
         
     #------------------------------- Export childs
     for i in range(item.childCount()):
         itemChild = item.childAtIndex(i)
-        out_dict[itemChild.name] = jsonExportItem(itemChild)
+        out_dict[itemChild.name] = JSON_export_item(itemChild)
         
     return out_dict
 
 # Grab all channels of an item and write it as separate Dict
-def getChannels(item:modo.Item):
+def JSON_get_channels(item:modo.Item):
     """
     Retrieve and format the channels of a given modo item.
 
@@ -374,69 +362,37 @@ def getChannels(item:modo.Item):
     mChan:modo.Channel
     for mChan in item.channels():
         chanName = str(mChan.name).split(".")[0] # Important ! if not using the first part of the name, channelTriple are treated as 3 channels
-        d = formatChannel(item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
+        d = UTIL_format_channel(item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
         d_channels[chanName] = d
             
     
     alphaSort = OrderedDict(sorted(d_channels.items()))
     return alphaSort
 
-# Format a channel to the right type (lots of weird stuff here, personnal cooking !)
-def formatChannel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
-    """
-    Formats a modo.Channel object into a dictionary containing its properties.
 
-    Parameters:
-        channel (modo.Channel): The channel to be formatted.
-        ctype (int): The channel type identifier.
-        evalType (str): The evaluation type of the channel.
-        storageType (str): The storage type of the channel.
 
-    Returns:
-        dict: A dictionary containing the channel's value, type, evaltype, and storageType.
-        If any attribute is missing or an error occurs, appropriate error messages are included.
-    """
-    
-    if (ctype == None) : ctype = "NONE"
-    if (evalType == None) : evalType = "NONE"
-    if (storageType == None) : storageType = "NONE"
+#////////////////////////////////////// USD
 
+# Write the data as USDA
+def USD_write_file(filename:str, xml:ET.Element):
+    print("saving usd ...")
     
-    chan = {} #----------------------------------------------- container to receive the channels properties
+    stage = Usd.Stage.CreateNew(filename + '.usda')
     
-    if storageType == "color1":storageType='color3'
-    if evalType == "color1":evalType='color3'
-        
-    if type(channel) is modo.ChannelTriple:
-        # values = channel.get()
-        # for i in range(len(values)):
-        #     value = channel.get()[i]
-        #     print(type(value))
-        
-        
-        try: chan['value'] = str(channel.get())
-        except AttributeError: chan['value'] = "This channel has no value!"
-        except: chan['value'] = "There was an error!"
+    context = ShadingContext()
+    context = USD_export_shadertree(stage, "/shadertree", context, xml)
+    
+    stage.GetRootLayer().Save()
+    print("✅ USD saved")
+    diag("Files", "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
+    
+    #----------- consolidate scene
+    if consolidateScene:
+        UTIL_copy_and_clean_files()
+        print("✅ Scene consolidated")
+        diag("Files", "Save", f"Consolidation succesful !")
 
-    else:
-        try: chan['value'] = UTIL_format_channel_value(channel)
-        except AttributeError: chan['value'] = "This channel has no value!"
-        except: chan['value'] = "There was an error!"
-    
-    try: chan['type'] = channelTypeMap[ctype]
-    except AttributeError: chan['type'] = "This channel has no type!"
-    except: chan['type'] = "There was an error!"
-    
-    try: chan['evaltype'] = evalType
-    except AttributeError: chan['type'] = "This channel has no evaltype!"
-    except: chan['type'] = "There was an error!"
-    
-    try: chan['storageType'] = storageType
-    except AttributeError: chan['storageType'] = "This channel has no storageType!"
-    except: chan['storageType'] = "There was an error!"
-    
-    return chan
-
+# Recursive traversing of an xml tree representation of the shader tree to build an equivalent USD tree
 def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml:ET.Element) -> ShadingContext:
     """
     Recursively exports a shader tree to a USD stage based on an XML representation.
@@ -583,12 +539,12 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
             if (verbose and verbose_modify_tree):print("✅ Create ADVANCED MATERIAL at %s" % (material.GetPath()))
             diag("USD_Create", xml.tag, f"Create ADVANCED MATERIAL at {material.GetPath()}")
             #---------------------------------------------------- Create material definition
-            shader = USD_create_shader(stage, material, xml, False)
+            shader = USD_create_mtlx_standard_surface_shader(stage, material, xml, False)
             context.shader = shader
             context.advancedMaterialChannels = xml.find("channels")
             #---------------------------------------------------- Create gl preview material definition
             if (exportGlPreviewMaterial):
-                previewShader = USD_create_shader(stage, material, xml, True)
+                previewShader = USD_create_mtlx_standard_surface_shader(stage, material, xml, True)
                 context.previewShader = previewShader
         
         case "channels":
@@ -600,40 +556,7 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
  
     return context
 
-def USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output: 
-    #---------------------------------------------------- Create texture definition even if modo layer is disabled
-    constantPath:Path = path.AppendPath(UTIL_clean_name(xml.get('name')))
-    constantShader = UsdShade.Shader.Define(stage, constantPath)
-    constantShader.CreateIdAttr("ND_constant" + UTIL_get_node_type_prefix(outType))
-    output:UsdShade.Output = constantShader.CreateOutput("out", outType)
-    
-    return output
-
-def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
-    #---------------------------------------------------- Create texture definition even if modo layer is disabled
-    noisePath:Path = path.AppendPath(UTIL_clean_name(xml.get('name')))
-    noiseShader = UsdShade.Shader.Define(stage, noisePath)
-    noiseShader.CreateIdAttr("ND_unifiednoise3d_float")
-    
-    #---------------------------------------------------- Common
-    noiseShader.CreateInput("position", Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocatorOutput)
-    noiseShader.CreateInput("freq", Sdf.ValueTypeNames.Vector3f).Set((1.0,1.0,1.0))
-    noiseShader.CreateInput("offset", Sdf.ValueTypeNames.Vector3f).Set((0.0,0.0,0.0))
-    noiseShader.CreateInput("Jitter", Sdf.ValueTypeNames.Float).Set(1.0)
-    noiseShader.CreateInput("type", Sdf.ValueTypeNames.Int).Set(3) # 0:Perlin 1:Cell 2:Worley 3:Fractal
-    
-    #---------------------------------------------------- Post Process
-    noiseShader.CreateInput("outmin", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value1').get('value'))/2 + 0.5)
-    noiseShader.CreateInput("outmax", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value2').get('value')))
-    noiseShader.CreateInput("clampoutput", Sdf.ValueTypeNames.Int).Set(0)
-    
-    #---------------------------------------------------- Fractal
-    noiseShader.CreateInput("octaves", Sdf.ValueTypeNames.Int).Set(int(xml.find('channels/freqs').get('value')))
-    noiseShader.CreateOutput("lacunarity", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/freqRatio').get('value')))
-    noiseShader.CreateOutput("diminish", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/ampRatio').get('value')))
-    
-    return noiseShader.CreateOutput("out", Sdf.ValueTypeNames.Float)
-    
+# Connect an effect layer to the last created output for this stack
 def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
     """
     Connects a shader output to a specified input using a blend operator.
@@ -723,6 +646,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     
     return output
 
+# Connect all effect stack layers together
 def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, name:str)->UsdShade.Output:
     
     output:UsdShade.Output = None
@@ -752,7 +676,8 @@ def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, 
         USD_connect_texture_output_to_shader_input(stage, context, effectName, output, name)
         
     return output
-    
+
+# Create a connector and stack it in context
 def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, context:ShadingContext) -> ShadingContext:
     """
     Adds a shader connector to the specified shading context based on the provided XML element.
@@ -809,7 +734,7 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
     return context
     
 # Create USD shader for advanced material layer
-def USD_create_shader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
+def USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
     """
     Create a USD shader from an XML element and add it to a given stage and material.
 
@@ -1028,6 +953,42 @@ def USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, s
             return shaderRef.CreateInput(usdInputName, sdfType).Set(sdfValue)
     
     return None
+
+# Create an USD definition of a modo constant 
+def USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output: 
+    #---------------------------------------------------- Create texture definition even if modo layer is disabled
+    constantPath:Path = path.AppendPath(UTIL_clean_name(xml.get('name')))
+    constantShader = UsdShade.Shader.Define(stage, constantPath)
+    constantShader.CreateIdAttr("ND_constant" + UTIL_get_node_type_prefix(outType))
+    output:UsdShade.Output = constantShader.CreateOutput("out", outType)
+    
+    return output
+
+# Create an USD definition of a modo 3D texture (noise only actually)
+def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocatorOutput:UsdShade.Output) -> UsdShade.Output:    
+    #---------------------------------------------------- Create texture definition even if modo layer is disabled
+    noisePath:Path = path.AppendPath(UTIL_clean_name(xml.get('name')))
+    noiseShader = UsdShade.Shader.Define(stage, noisePath)
+    noiseShader.CreateIdAttr("ND_unifiednoise3d_float")
+    
+    #---------------------------------------------------- Common
+    noiseShader.CreateInput("position", Sdf.ValueTypeNames.Vector3f).ConnectToSource(texLocatorOutput)
+    noiseShader.CreateInput("freq", Sdf.ValueTypeNames.Vector3f).Set((1.0,1.0,1.0))
+    noiseShader.CreateInput("offset", Sdf.ValueTypeNames.Vector3f).Set((0.0,0.0,0.0))
+    noiseShader.CreateInput("Jitter", Sdf.ValueTypeNames.Float).Set(1.0)
+    noiseShader.CreateInput("type", Sdf.ValueTypeNames.Int).Set(3) # 0:Perlin 1:Cell 2:Worley 3:Fractal
+    
+    #---------------------------------------------------- Post Process
+    noiseShader.CreateInput("outmin", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value1').get('value'))/2 + 0.5)
+    noiseShader.CreateInput("outmax", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value2').get('value')))
+    noiseShader.CreateInput("clampoutput", Sdf.ValueTypeNames.Int).Set(0)
+    
+    #---------------------------------------------------- Fractal
+    noiseShader.CreateInput("octaves", Sdf.ValueTypeNames.Int).Set(int(xml.find('channels/freqs').get('value')))
+    noiseShader.CreateOutput("lacunarity", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/freqRatio').get('value')))
+    noiseShader.CreateOutput("diminish", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/ampRatio').get('value')))
+    
+    return noiseShader.CreateOutput("out", Sdf.ValueTypeNames.Float)
 
 # Create and connect USD texture Shader when image found in the shader tree
 def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output:
@@ -1451,6 +1412,66 @@ def USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingC
     diag("Unsupported", "Effect", f"[{effectName}] is not yet supported (ignored)")
     return None
 
+
+
+#////////////////////////////////////// UTIL
+
+# Format a channel to the right type (lots of weird stuff here, personnal cooking !)
+def UTIL_format_channel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
+    """
+    Formats a modo.Channel object into a dictionary containing its properties.
+
+    Parameters:
+        channel (modo.Channel): The channel to be formatted.
+        ctype (int): The channel type identifier.
+        evalType (str): The evaluation type of the channel.
+        storageType (str): The storage type of the channel.
+
+    Returns:
+        dict: A dictionary containing the channel's value, type, evaltype, and storageType.
+        If any attribute is missing or an error occurs, appropriate error messages are included.
+    """
+    
+    if (ctype == None) : ctype = "NONE"
+    if (evalType == None) : evalType = "NONE"
+    if (storageType == None) : storageType = "NONE"
+
+    
+    chan = {} #----------------------------------------------- container to receive the channels properties
+    
+    if storageType == "color1":storageType='color3'
+    if evalType == "color1":evalType='color3'
+        
+    if type(channel) is modo.ChannelTriple:
+        # values = channel.get()
+        # for i in range(len(values)):
+        #     value = channel.get()[i]
+        #     print(type(value))
+        
+        
+        try: chan['value'] = str(channel.get())
+        except AttributeError: chan['value'] = "This channel has no value!"
+        except: chan['value'] = "There was an error!"
+
+    else:
+        try: chan['value'] = UTIL_format_channel_value(channel)
+        except AttributeError: chan['value'] = "This channel has no value!"
+        except: chan['value'] = "There was an error!"
+    
+    try: chan['type'] = channelTypeMap[ctype]
+    except AttributeError: chan['type'] = "This channel has no type!"
+    except: chan['type'] = "There was an error!"
+    
+    try: chan['evaltype'] = evalType
+    except AttributeError: chan['type'] = "This channel has no evaltype!"
+    except: chan['type'] = "There was an error!"
+    
+    try: chan['storageType'] = storageType
+    except AttributeError: chan['storageType'] = "This channel has no storageType!"
+    except: chan['storageType'] = "There was an error!"
+    
+    return chan
+
 def UTIL_get_key_from_value(dict, value):
     """
     Retrieve the key associated with a given value in usdInputMap['effects'].
@@ -1715,4 +1736,4 @@ def UTIL_get_consolidated_path() -> str:
 
 def UTIL_get_consolidated_relative_path(path:str) -> str:
     scene = modo.scene.current()
-    return os.path.join(".", os.path.basename(scene.filename).removesuffix(".lxo"), os.path.basename(path))
+    return os.path.join(".", os.path.basename(scene.filename).removesuffix(".lxo") + "_textures", os.path.basename(path))
