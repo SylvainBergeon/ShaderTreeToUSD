@@ -4,22 +4,23 @@ If you're trying to export Modo scenes to Houdini (as an example but It may be B
 This plugin is intended to export your shader tree as a whole into a USDA file that allows to get all your material back in Houdini as a USD layer, and to reassign it automatically to your meshes polygon tag/geom subsets.
 
 ## Current support
-It's in beta actually, but works quite well on my side (almost for 80% of my needs) :
-• Basic shading is supported
-• Basic texture layers compositing is supported
-• 3d textures and gradients are not yet supported (and will probably never be as they are too much Modo specifics, and not supported by USD/MTLX)
-• Automatic assignment is supported through a Python node (available in sample scene package) in houdini (or manually if you like)
-• Each material can be overridden manually using a Edit Material Network Node in Houdini Stage Graph.
+It's in beta actually, but works quite well on my side (almost for 80% of my needs) :  
+• Basic shading is supported  
+• Basic texture layers compositing is supported  
+• 3d textures and gradients are not yet supported (and will probably never be as they are too much Modo specifics, and not supported by USD/MTLX)  
+• Automatic assignment is supported through a Python node (available in sample scene package) in houdini (or manually if you like)  
+• Each material can be overridden manually using a Edit Material Network Node in Houdini Stage Graph.  
 
 ## Options
-Options are available through  preferences :
-• Export as (json, xml, usda)
-• Filter log outputs
-• Output diagnostic xml file for debugging
+Options are available through  preferences :  
+• Export as (json, xml, usda)  
+• Filter log outputs  
+• Output diagnostic xml file for debugging  
+• Consolidate scene will copy all linked texture files into a dedicated local scene_name_textures folder (existing files in this folder that are not longer used will be then moved to an unused sub folder)  
 
-## How it works
-• Click on the USD icon button on top of your shader tree toolbar
-• Alt-click to fast select output formats
+## How it works  
+• Click on the USD icon button on top of your shader tree toolbar  
+• Alt-click to fast select output formats  
 
 This kit is still under development, and need testing support, if you run into trouble, feel free to contact me or ask questions here.
 
