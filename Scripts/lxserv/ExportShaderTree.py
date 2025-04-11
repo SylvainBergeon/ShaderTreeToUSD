@@ -2,14 +2,8 @@
 import sys
 import os
 
-# Register pixar's USD lib (pxr)
-project_dir = os.path.dirname(__file__)
-pxr_path = os.path.join(project_dir, 'libs')
-sys.path.insert(0, pxr_path)
-
 import lx
 import lxu.command
-import python_modules.ShaderTree
 
 try:
     from importlib import reload
@@ -69,7 +63,13 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
         # reloads external modules - offloading to external module(s)makes development & debugging quicker since 
         # code edited in those modules does not require a re-start of modo to run. Only changes to this module 
         # require a restart.
-        reload_modules()
+        try:
+        	reload_modules()
+        except NameError:
+            # deferred import of python_modules - fixes an issue with Modo crashing
+            # in Windows on startup as the kit is being parsed by lxserv. Now it's imported
+            #the first time the commend is run.
+        	import python_modules.ShaderTree
         
         # Call the export function with the selected options
         python_modules.ShaderTree.export_basic_execute(self, msg)
