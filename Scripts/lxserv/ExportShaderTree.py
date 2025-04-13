@@ -5,13 +5,29 @@ import os
 import lx
 import lxu.command
 
+# looks like we need this to keep referencing ST at module root
+ST = None
+import python_modules.ShaderTree as ST
+
 try:
     from importlib import reload
 except ImportError:
     from imp import reload
 
 def reload_modules():
-    reload(python_modules.ShaderTree)
+    
+    # looks like we need this to keep referencing ST at module root
+    global ST
+    
+    print("Try reload modules")
+    try:
+        reload(ST)
+    except NameError:
+        print("name error !!")
+    finally:
+        print("There was error")
+        print("Force import")
+        import python_modules.ShaderTree as ST
 
 class Cmd_ExportShaderTree(lxu.command.BasicCommand):
 
@@ -50,8 +66,7 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
                 
                 # Set the default value
                 lx.eval(f'user.value {pref_name} {str(default_value).lower()}')
-                
-                    
+                                 
     def cmd_Flags(self) -> int:
       return lx.symbol.fCMD_UNDO | lx.symbol.fCMD_MODEL
 
@@ -63,16 +78,10 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
         # reloads external modules - offloading to external module(s)makes development & debugging quicker since 
         # code edited in those modules does not require a re-start of modo to run. Only changes to this module 
         # require a restart.
-        try:
-        	reload_modules()
-        except NameError:
-            # deferred import of python_modules - fixes an issue with Modo crashing
-            # in Windows on startup as the kit is being parsed by lxserv. Now it's imported
-            #the first time the commend is run.
-        	import python_modules.ShaderTree
+        reload_modules()
         
         # Call the export function with the selected options
-        python_modules.ShaderTree.export_basic_execute(self, msg)
+        ST.export_basic_execute(self, msg)
         
         msg.SetCode(lx.result.OK)
 

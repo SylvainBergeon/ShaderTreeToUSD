@@ -7,8 +7,6 @@ from collections import OrderedDict
 from pathlib import Path
 from pxr import Sdf, Usd, UsdShade, UsdGeom
 
-print(Sdf)
-
 from .ShaderFilters import usdInputMap
 from .ShaderFilters import usdTypeMap
 from .ShaderFilters import channelTypeMap
@@ -49,12 +47,18 @@ class ShadingContext:
 class shaderConnector:
     name:str
     output:UsdShade.Output
+    outType:str
     opacity:float
     blend:str
     path:str
     
-    def dump(_self) -> str:
-        return (f"{_self.name} {_self.output.GetBaseName()} {_self.blend} {_self.opacity}")
+    def dump(_self):
+        print(f"Name : {_self.name}")
+        print(f"Output : {_self.output}")
+        print(f"Output type : {_self.outType}")
+        print(f"Opacity : {_self.opacity}")
+        print(f"Blend : {_self.blend}")
+        print(f"Path : {_self.path}")
     
 # textureList is used to store the source path of any texture used by the shaders
 # in order to later consolidate the scene by copying all these textures to a consolidated folder
@@ -578,8 +582,10 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
     name = connector.name
     blend:str = connector.blend
     opacity:float = connector.opacity
+    
     output:UsdShade.Output = connector.output
-    outType = output.GetTypeName()
+    # outType = output.GetTypeName()
+    outType = connector.outType
     path = connector.path
     
     texturePath = str(path) #+ "/" + name
@@ -650,7 +656,7 @@ def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output
 def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, name:str)->UsdShade.Output:
     
     output:UsdShade.Output = None
-        
+    
     for effectName in context.effectsStack.keys():
         # ////////////////////////////////// WEAK - Should be better too use a dedicated mapping table with default value or something
         #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
@@ -666,8 +672,10 @@ def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, 
         # ////////////////////////////////// WEAK
         
         #----------------------------------------------------- Create connections
+        # print(f"Unstacking : {effectName} has {len(context.effectsStack[effectName])} layers")
         for connectorIndex in range(0, len(context.effectsStack[effectName])):
             connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
+            # print(f"Unstacking {effectName} layer N° {connectorIndex} : {connector.name}")
             
             # Create the connector nodes, connect the previous output and expose the new output
             output = USD_connect_operator(stage, connector, output)
@@ -718,6 +726,7 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
         shaderConnection.name = xml.get("name")
         shaderConnection.path = path
         shaderConnection.output = output
+        shaderConnection.outType = output.GetTypeName()
         shaderConnection.blend = xml.find("channels/blend").get("value")
         shaderConnection.opacity = float(xml.find("channels/opacity").get("value"))
         
@@ -1619,7 +1628,7 @@ def UTIL_float_to_out_type(value:float, outType:Sdf.ValueTypeNames):
         case Sdf.ValueTypeNames.Color4f:
             return (value, value, value, 1.0)
 
-def UTIL_get_node_type_prefix(outType):
+def UTIL_get_node_type_prefix(outType:str):
     """
     Determine the prefix for a node type based on the output type.
 
