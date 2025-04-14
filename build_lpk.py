@@ -99,7 +99,8 @@ def create_lpk_archive(kitFolder, kitName, files):
     print(f"LPK archive created successfully: {lpk_path}")
     return lpk_path
     
-#Main execution    
+#/////////////////////////////////////// Main execution
+# Build list of files to incorporate
 files = listFiles(kitFolder)
 
 # Generate and save index.xml
