@@ -10,15 +10,15 @@ import shutil
 
 #Setup Variables for Kit
 kitFolder = '/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/ShaderTreeToUSD'
-kitName = 'LPK_ShaderTreeToUSD'
+kitName = 'ShaderTreeToUSD'
 kitMessage = '%s Kit installation complete.' % kitName
 modoVersion = "801"
 installAlias = 'kit'
 
 platformSpecifiPath = {
-    "libs/mac":"MacOSX",
-    "libs/win":"Windows",
-    "libs/linux":"linux"
+    "libs-mac":"MacOSX",
+    "libs-win":"Win64",
+    "libs-linux":"linux"
 }
 
 ignorepath = [".git", ".qodo", ".vscode"]
