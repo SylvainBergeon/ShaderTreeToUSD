@@ -378,16 +378,19 @@ def JSON_get_channels(item:modo.Item):
 
 # Write the data as USDA
 def USD_write_file(filename:str, xml:ET.Element):
-    print("saving usd ...")
+    print(f"saving usd ... {filename}")
     
     stage = Usd.Stage.CreateNew(filename + '.usda')
     
     context = ShadingContext()
     context = USD_export_shadertree(stage, "/shadertree", context, xml)
     
-    stage.GetRootLayer().Save()
-    print("✅ USD saved")
-    diag("Files", "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
+    if (stage.GetRootLayer().Save()):
+        print("✅ USD saved")
+        diag("Files", "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
+    else:
+        print("⁉️ USD not saved")
+        diag("Files", "Save", f"{os.path.basename(filename)}.usda NOT saved succesfully !")
     
     #----------- consolidate scene
     if consolidateScene:
