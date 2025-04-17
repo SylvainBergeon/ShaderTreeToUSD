@@ -4,9 +4,10 @@
 import os, shutil
 import re, sys, math, json
 import lx, modo
+from typing import Union
 from collections import OrderedDict
 from pathlib import Path
-from pxr import Sdf, Usd, UsdShade, UsdGeom
+from fnpxr import Sdf, Usd, UsdShade, UsdGeom
 
 from .ShaderFilters import usdInputMap
 from .ShaderFilters import usdTypeMap
@@ -806,7 +807,7 @@ def USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.M
     return shader
 
 # Apply overrides when things are specific to how the shaderTree works (multiple options due to legacy and updates)
-def USD_apply_overrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> str|None: 
+def USD_apply_overrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> Union[str, None]: 
     """
     Apply overrides to a given USD value based on the BRDF type and Modo input name.
 

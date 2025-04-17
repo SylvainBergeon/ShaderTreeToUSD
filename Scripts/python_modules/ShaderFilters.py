@@ -1,5 +1,5 @@
 import lx
-from pxr import Sdf
+from fnpxr import Sdf
 
 filters = {}
 filters [lx.symbol.sITYPE_ADVANCEDMATERIAL] = [

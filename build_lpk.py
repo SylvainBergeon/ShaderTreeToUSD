@@ -6,13 +6,12 @@ It also packages all files into a .lpk file (which is a zip archive with a diffe
 
 import os
 import zipfile
-import shutil
 
 #Setup Variables for Kit
 kitFolder = '/Users/sylvainbergeon/Library/Application Support/Luxology/Kits/ShaderTreeToUSD'
 kitName = 'ShaderTreeToUSD'
 kitMessage = '%s Kit installation complete.' % kitName
-modoVersion = "801"
+modoVersion = "1601"
 installAlias = 'kit'
 
 platformSpecifiPath = {
