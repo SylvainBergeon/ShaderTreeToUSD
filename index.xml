@@ -10,13 +10,10 @@
 		<source target="ShaderTreeToUSD/Configs/icons/Export_32.png" >Configs/icons/Export_32.png</source>
 		<source target="ShaderTreeToUSD/Scripts/lxserv/ExportShaderTree.py" >Scripts/lxserv/ExportShaderTree.py</source>
 		<source target="ShaderTreeToUSD/Scripts/lxserv/__pycache__/ExportShaderTree.cpython-310.pyc" >Scripts/lxserv/__pycache__/ExportShaderTree.cpython-310.pyc</source>
-		<source target="ShaderTreeToUSD/Scripts/lxserv/__pycache__/ExportShaderTree.cpython-39.pyc" >Scripts/lxserv/__pycache__/ExportShaderTree.cpython-39.pyc</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderTree.py" >Scripts/python_modules/ShaderTree.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters.py" >Scripts/python_modules/ShaderFilters.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/__pycache__/ShaderTree.cpython-310.pyc" >Scripts/python_modules/__pycache__/ShaderTree.cpython-310.pyc</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/__pycache__/ShaderFilters.cpython-310.pyc" >Scripts/python_modules/__pycache__/ShaderFilters.cpython-310.pyc</source>
-		<source target="ShaderTreeToUSD/Scripts/python_modules/__pycache__/ShaderTree.cpython-39.pyc" >Scripts/python_modules/__pycache__/ShaderTree.cpython-39.pyc</source>
-		<source target="ShaderTreeToUSD/Scripts/python_modules/__pycache__/ShaderFilters.cpython-39.pyc" >Scripts/python_modules/__pycache__/ShaderFilters.cpython-39.pyc</source>
 	</kit>
 	<message button="Help">ShaderTreeToUSD Kit installation complete.</message>
 </package>
