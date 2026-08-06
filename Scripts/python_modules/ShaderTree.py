@@ -318,7 +318,7 @@ def _JSON_write_file(filename, dictionary):
         json.dump(dictionary, fout, indent=1)
         fout.flush()
         
-    _diag("Files", "Save", f"{os.path.basename(filename)}.xm saved succesfully !")
+    _diag("Files", "Save", f"{os.path.basename(filename)}.json saved succesfully !")
 
 # Recursively convert the shader tree structure to a Dict struccture (for json exoport)
 def _JSON_export_item(item:modo.Item):
@@ -704,14 +704,14 @@ def _USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Outpu
 
     if blend in [lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY, lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE]:
         operator.CreateInput('in1', output.GetTypeName()).ConnectToSource(output)
-        _set_or_connect(operator, 'in2', output.GetTypeName(), input)
+        _USD_set_or_connect(operator, 'in2', output.GetTypeName(), input)
         output = operator.CreateOutput('out', outType)
 
         #----------------------------------------------------- set opacity as mix
         operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_mix")
         operator.CreateIdAttr("ND_mix" + _UTIL_get_node_type_prefix(outType))
         operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
-        _set_or_connect(operator, 'bg', output.GetTypeName(), input)
+        _USD_set_or_connect(operator, 'bg', output.GetTypeName(), input)
         operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
 
         #----------------------------------------------------- Expose output
