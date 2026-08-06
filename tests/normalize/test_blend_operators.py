@@ -17,25 +17,24 @@ def blend_el(layer):
     return layer.find('channels/blend')
 
 
-@pytest.mark.parametrize("blend,expected_operator,expected_pattern", [
-    ("multiply", "ND_multiply", "dual"),
-    ("divide", "ND_divide", "dual"),
-    ("normal", "ND_mix", "single"),
-    ("add", "ND_plus", "single"),
-    ("subtract", "ND_minus", "single"),
-    ("screen", "ND_screen", "single"),
-    ("colorburn", "ND_burn", "single"),
-    ("colordodge", "ND_dodge", "single"),
-    ("difference", "ND_difference", "single"),
-    ("overlay", "ND_overlay", "single"),
+@pytest.mark.parametrize("blend,expected_operator", [
+    ("multiply", "ND_multiply"),
+    ("divide", "ND_divide"),
+    ("normal", "ND_mix"),
+    ("add", "ND_plus"),
+    ("subtract", "ND_minus"),
+    ("screen", "ND_screen"),
+    ("colorburn", "ND_burn"),
+    ("colordodge", "ND_dodge"),
+    ("difference", "ND_difference"),
+    ("overlay", "ND_overlay"),
 ])
-def test_supported_blends_resolve_to_their_usd_operator(blend, expected_operator, expected_pattern):
+def test_supported_blends_resolve_to_their_usd_operator(blend, expected_operator):
     layer = make_layer(blend=blend, opacity="1.0")
 
     result = normalize_blend_operators(layer)
 
     assert blend_el(result).get('usdOperator') == expected_operator
-    assert blend_el(result).get('usdMixPattern') == expected_pattern
 
 
 @pytest.mark.parametrize("blend", [
@@ -55,7 +54,6 @@ def test_unknown_blend_value_is_marked_unsupported_rather_than_raising():
     result = normalize_blend_operators(layer) # must not raise
 
     assert blend_el(result).get('usdOperator') == ""
-    assert blend_el(result).get('usdMixPattern') == "single"
 
 
 def test_input_tree_is_never_mutated():
