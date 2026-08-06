@@ -2,3 +2,5 @@
 .vscode
 .DS_Store
 Scripts/pxr-stubs
+__pycache__/
+.pytest_cache/
