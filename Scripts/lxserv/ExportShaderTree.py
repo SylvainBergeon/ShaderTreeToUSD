@@ -65,12 +65,7 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
             'USDExport_saveDiagnostic': True,
             #---------------------------------------------------- Event log message
             'USDExport_verbose': False,
-            'USDExport_verboseSetValue': True,
-            'USDExport_verboseCreateShader': True,
-            'USDExport_verboseOverrideValue': True,
             'USDExport_verboseModifyTree': True,
-            'USDExport_verboseConsolidate': True,
-            'USDExport_verboseUnsupported': True,
             #---------------------------------------------------- USD options
             'USDExport_exportGlPreviewMaterial': False
         }
