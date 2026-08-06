@@ -52,6 +52,7 @@ class ShadingContext:
     parentPath: str = ""
     advancedMaterialChannels: ET.Element
     effectsStack:OrderedDict = OrderedDict()
+    effectUsdInputNames:dict = {} # effectName (Modo) -> usdInputName, set alongside effectsStack
 
 class shaderConnector:
     name:str
@@ -529,9 +530,10 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
         
         #---------------------------------------------------- Connect texture to shader and previewShader inputs if possible
         if xml.find('channels/enable').get('value') == "1":
-            effectName = xml.find('channels/effect').get('value')
-            sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
-            
+            effectChannel = xml.find('channels/effect')
+            effectName = effectChannel.get('value')
+            sdfType = usdTypeMap[effectChannel.get('usdInputName')]
+
             if (verbose and verbose_modify_tree):print("✅ Create IMAGEMAP at %s as %s" % (path, effectName))
             _diag("USD_Create", xml.tag, f"Create IMAGEMAP at [{path}] as [{effectName}]")
             
@@ -566,8 +568,9 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
         shader:UsdShade.Shader = context.shader
         
         if xml.find('channels/enable').get('value') == "1":
-            effectName = xml.find('channels/effect').get('value')
-            sdfType = usdTypeMap[usdInputMap['effect'][effectName]]
+            effectChannel = xml.find('channels/effect')
+            effectName = effectChannel.get('value')
+            sdfType = usdTypeMap[effectChannel.get('usdInputName')]
             materialPath = material.GetPath()
             
             if (verbose and verbose_modify_tree):print("✅ Create CONSTANT at %s as %s" % (path, effectName))
@@ -635,11 +638,12 @@ def _USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output,
     path:Path = material.GetPath().AppendPath(name)
     
     #----------------------------------------------------------- create effectStack if doesn't exist yet for this effect
-    effectName:str = xml.find("channels/effect")
-    if effectName != None:
-        effectName = xml.find("channels/effect").get("value")
+    effectChannel = xml.find("channels/effect")
+    if effectChannel != None:
+        effectName = effectChannel.get("value")
         if not effectName in context.effectsStack.keys():
             context.effectsStack[effectName] = []
+            context.effectUsdInputNames[effectName] = effectChannel.get("usdInputName")
         
         #----------------------------------------------------------- Set values for the shaderConnection
         blendChannel = xml.find("channels/blend")
@@ -754,7 +758,7 @@ def _USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str,
         #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
         print("------------------------------")
         print(f"effectName={effectName}")
-        usdInputName = usdInputMap['effect'][effectName]
+        usdInputName = context.effectUsdInputNames[effectName]
         print(f"usdInputName={usdInputName}")
         modoInputName = _UTIL_get_key_from_value(stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL]['principled'], usdInputName)
         print(f"modoInputName={modoInputName}")
@@ -814,9 +818,8 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
     previewShader:UsdShade.Shader = context.previewShader
     path:Path = material.GetPath().AppendPath(name)
     
-    if effectName in usdInputMap['effect'].keys():
-        inputName = usdInputMap['effect'][effectName]
-        
+    inputName = context.effectUsdInputNames.get(effectName)
+    if inputName:
         print(f"material path: {output.GetPrim().GetPath()}")
         print(f"effectname: {effectName} --> inputName: {inputName}")
         
@@ -1117,31 +1120,29 @@ def _USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.E
     texturePath:Path = materialPath.AppendPath(_UTIL_clean_name(xml.get('name')))
 
     #---------------------------------------------------- Define by projection type
-    projType = xml.find('txtrLocator/channels/projType').get('value')
-    
+    projTypeChannel = xml.find('txtrLocator/channels/projType')
+    projType = projTypeChannel.get('value')
+    usdProjType = projTypeChannel.get('usdProjType')
+
+    if usdProjType != projType:
+        if(verbose and verbose_unsupported): print(f"❎ Unsupported: {projType} projection type is not yet supported (switched to default UV)")
+        _diag("Unsupported", "Projection_Type", f"[{projType}] in {texturePath} is not yet supported (switched to default UV)")
+
     #---------------------------------------------------- Create the texture transform
     textureTransformOutput:UsdShade.Output
     textureOutput:UsdShade.Output
-    
-    if projType == "uv":
+
+    if usdProjType == "uv":
         #---------------------------------------------------- Create the UV texture transform node
         textureTransformOutput = _USD_create_UV_texture_transform(stage, materialPath, xml)
         #---------------------------------------------------- Create the UV texture node
         textureOutput = _USD_create_UV_texture(stage, materialPath, xml, outType, textureTransformOutput)
-        
-    elif projType == "triplanar":
+
+    else: # usdProjType == "triplanar"
         #---------------------------------------------------- Create the UV texture transform node
         textureTransformOutput:UsdShade.Output = _USD_create_3D_texture_transform(stage, materialPath, xml)
         #---------------------------------------------------- Create the triplanar texture node
         textureOutput = _USD_create_triplanar_texture(stage, materialPath, xml, outType, textureTransformOutput)
-        
-    else:
-        if(verbose and verbose_unsupported): print(f"❎ Unsupported: {projType} projection type is not yet supported (switched to default UV)")
-        _diag("Unsupported", "Projection_Type", f"[{projType}] in {texturePath} is not yet supported (switched to default UV)")
-        #---------------------------------------------------- Create the UV texture transform node
-        textureTransformOutput = _USD_create_UV_texture_transform(stage, materialPath, xml)
-        #---------------------------------------------------- Create the UV texture node
-        textureOutput = _USD_create_UV_texture(stage, materialPath, xml, outType, textureTransformOutput)
     
     #---------------------------------------------------- Create the texture adjust nodegraph
     textureAdjustNodeGraphOutput = _USD_create_texture_adjust_nodegraph(stage, materialPath, xml, outType, textureOutput)
