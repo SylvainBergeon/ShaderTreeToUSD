@@ -19,6 +19,8 @@ from .ShaderFilters import usdTypeMap
 from .ShaderFilters import channelTypeMap
 from .ShaderFilters import stdMatChannelMap
 
+from .normalize import normalize as normalize_shadertree
+
 try:
     import xml.etree.cElementTree as ET
 except ImportError:
@@ -177,10 +179,14 @@ def export_basic_execute(Cmd_obj, msg):
     if export_json: _JSON_write_file(filename, json_shadertree)
 
     #----------- as XML
-    if export_xml: _XML_write_file(filename, xml_shadertree)
-    
+    if export_xml:
+        _XML_write_file(filename, xml_shadertree)
+        #------- Also save the normalized XML separately, to compare against the raw one
+        xml_shadertree_normalized = normalize_shadertree(xml_shadertree)
+        _XML_write_file(filename + "_normalized", xml_shadertree_normalized)
+
     #----------- as usda
-    if export_usda or export_usd or export_usdz: _USD_write_file(filename, xml_shadertree)
+    if export_usda or export_usd: _USD_write_file(filename, xml_shadertree)
     
     #----------- Write diadnostic file
     if export_diagnostic:
@@ -714,7 +720,7 @@ def _USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Outpu
     else:
         #----------------------------------------------------- Set opacity as mix
         operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
-        _set_or_connect(operator, 'bg', output.GetTypeName(), input)
+        _USD_set_or_connect(operator, 'bg', output.GetTypeName(), input)
         operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
 
         #----------------------------------------------------- Expose output
@@ -858,7 +864,7 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
             path:Path = material.GetPath().AppendPath(name + "_normalmap")
             print(f"Creating normal map shader for {name} @{path} with normalHeight={normalHeight}")
             normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            normalShader.CreateIdAttr("ND_normalmap")
+            normalShader.CreateIdAttr("ND_normalmap_float")
             normalShader.CreateInput("in", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
             normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(normalHeight)
             normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
