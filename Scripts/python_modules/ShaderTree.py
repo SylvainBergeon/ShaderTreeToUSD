@@ -58,15 +58,16 @@ class shaderConnector:
     output:UsdShade.Output
     outType:str
     opacity:float
-    blend:str
+    modoBlendOperator:str
+    usdOperator:str
     path:str
-    
+
     def dump(_self):
         print(f"Name : {_self.name}")
         print(f"Output : {_self.output}")
         print(f"Output type : {_self.outType}")
         print(f"Opacity : {_self.opacity}")
-        print(f"Blend : {_self.blend}")
+        print(f"Blend : {_self.modoBlendOperator}")
         print(f"Path : {_self.path}")
     
 # textureList is used to store the source path of any texture used by the shaders
@@ -641,12 +642,14 @@ def _USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output,
             context.effectsStack[effectName] = []
         
         #----------------------------------------------------------- Set values for the shaderConnection
+        blendChannel = xml.find("channels/blend")
         shaderConnection = shaderConnector()
         shaderConnection.name = xml.get("name")
         shaderConnection.path = path
         shaderConnection.output = output
         shaderConnection.outType = output.GetTypeName()
-        shaderConnection.blend = xml.find("channels/blend").get("value")
+        shaderConnection.modoBlendOperator = blendChannel.get("value")
+        shaderConnection.usdOperator = blendChannel.get("usdOperator")
         shaderConnection.opacity = float(xml.find("channels/opacity").get("value"))
         
         #----------------------------------------------------------- Add this connector to the stack
@@ -690,7 +693,8 @@ def _USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Outpu
         UsdShade.Output: The resulting shader output after applying the blend.
     """
     name = connector.name
-    blend:str = connector.blend
+    modoBlendOperator:str = connector.modoBlendOperator
+    usdOperator:str = connector.usdOperator
     opacity:float = connector.opacity
 
     output:UsdShade.Output = connector.output
@@ -699,21 +703,20 @@ def _USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Outpu
 
     texturePath = str(path) #+ "/" + name
 
-    if verbose and verbose_modify_tree: print(f"✅ CONNECT {name}: {input.GetFullName()} x {opacity} -> {blend} -> OUT")
+    if verbose and verbose_modify_tree: print(f"✅ CONNECT {name}: {input.GetFullName()} x {opacity} -> {usdOperator} -> OUT")
 
     #----------------------------------------------------- If blend effect not supported
-    if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
+    if not usdOperator:
         if verbose and verbose_unsupported:
-            print(f"❎ Unsupported: {blend} blend effect is not yet supported")
-        _diag("Unsupported", "Blend_Mode", f"[{blend}] in {texturePath} is not yet supported (ignored)")
+            print(f"❎ Unsupported: {modoBlendOperator} blend effect is not yet supported")
+        _diag("Unsupported", "Blend_Mode", f"[{modoBlendOperator}] in {texturePath} is not yet supported (ignored)")
         return output
 
     #----------------------------------------------------- Set effect blend operator (shared by both paths below)
-    operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
-    usdOperatorName = usdInputMap["blend"][blend] + _UTIL_get_node_type_prefix(outType)
-    operator.CreateIdAttr(usdOperatorName)
+    operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_" + usdOperator)
+    operator.CreateIdAttr(usdOperator + _UTIL_get_node_type_prefix(outType))
 
-    if blend in [lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY, lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE]:
+    if modoBlendOperator in [lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY, lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE]:
         operator.CreateInput('in1', output.GetTypeName()).ConnectToSource(output)
         _USD_set_or_connect(operator, 'in2', output.GetTypeName(), input)
         output = operator.CreateOutput('out', outType)
