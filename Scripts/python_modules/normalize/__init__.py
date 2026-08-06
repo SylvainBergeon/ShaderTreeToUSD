@@ -11,10 +11,14 @@
 
 from .specular_ior import normalize_specular_ior
 from .blend_operators import normalize_blend_operators
+from .projection_defaults import normalize_projection_defaults
+from .effect_channel_names import normalize_effect_channel_names
 
 NORMALIZATION_PASSES = [
     normalize_specular_ior,
     normalize_blend_operators,
+    normalize_projection_defaults,
+    normalize_effect_channel_names,
 ]
 
 
