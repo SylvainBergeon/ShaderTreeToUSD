@@ -4,7 +4,7 @@
 import os, shutil
 import re, sys, math, json
 import lx, modo
-from typing import Union, cast
+from typing import cast
 from collections import OrderedDict
 from pathlib import Path
 from fnpxr import Sdf, Usd, UsdShade, UsdGeom
@@ -172,6 +172,12 @@ def export_basic_execute(Cmd_obj, msg):
     renderer = scene.item(renderer_id)
     
     xml_shadertree = _XML_export_item(renderer)
+    #------- Normalized copy: every advancedMaterial channel gets a usdValue (gtr/principled-overridden
+    #------- where normalize_specular_ior applies, a straight copy of value otherwise), plus resolved
+    #------- usdOperator/usdProjType/usdInputName attributes from the other 3 passes (see
+    #------- Scripts/python_modules/normalize/). USD construction reads only this tree - the mtlx shader
+    #------- via usdValue, the glPreview shader via the untouched value on the same tree.
+    xml_shadertree_normalized = normalize_shadertree(xml_shadertree)
 
     #----------- Write files
     #----------- as Json
@@ -182,11 +188,10 @@ def export_basic_execute(Cmd_obj, msg):
     if export_xml:
         _XML_write_file(filename, xml_shadertree)
         #------- Also save the normalized XML separately, to compare against the raw one
-        xml_shadertree_normalized = normalize_shadertree(xml_shadertree)
         _XML_write_file(filename + "_normalized", xml_shadertree_normalized)
 
     #----------- as usda
-    if export_usda or export_usd: _USD_write_file(filename, xml_shadertree)
+    if export_usda or export_usd: _USD_write_file(filename, xml_shadertree_normalized)
     
     #----------- Write diadnostic file
     if export_diagnostic:
@@ -391,7 +396,7 @@ def _JSON_get_channels(item:modo.Item):
 #////////////////////////////////////// USD
 
 # Write the data as USDA
-def _USD_write_file(filename:str, xml:ET.Element):
+def _USD_write_file(filename:str, normalizedXml:ET.Element):
     print(f"saving usd ... {filename}")
 
     output_files = []
@@ -405,7 +410,7 @@ def _USD_write_file(filename:str, xml:ET.Element):
 
     stage = Usd.Stage.CreateInMemory()
     context = ShadingContext()
-    context = _USD_export_shadertree(stage, "/shadertree", context, xml)
+    context = _USD_export_shadertree(stage, "/shadertree", context, normalizedXml)
 
     saved_any = False
     for output_file in output_files:
@@ -448,11 +453,17 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
     are pushed onto or popped from the stack, allowing for nested shader operations
     to be correctly represented in the USD stage.
 
+    `xml` is expected to be the *normalized* tree (see normalize.normalize()): every advancedMaterial
+    channel carries both its raw Modo `value` and a `usdValue` (gtr/principled-overridden where
+    applicable, a straight copy of `value` otherwise - see normalize_specular_ior). Both the mtlx and the
+    glPreview shader read `usdValue` - UsdPreviewSurface needs the same corrected specular/IOR values the
+    mtlx BRDFs do, not the raw Modo ones - so both are safe to build from this same tree.
+
     Args:
         stage (Usd.Stage): The USD stage where the shader tree will be exported.
         path (str): The base path for the shader tree in the USD stage.
         context (ShadingContext): The current shading context, updated as the tree is traversed.
-        xml (ET.Element): The XML element representing the current node in the shader tree.
+        xml (ET.Element): The (normalized) XML element representing the current node in the shader tree.
 
     Returns:
         ShadingContext: The updated shading context after processing the shader tree.
@@ -470,7 +481,7 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
         _diag("USD_Create", xml.tag, f"Create SHADERTREE at {path}")
         
         UsdGeom.Scope.Define(stage, newpath)
-        
+
         for child in xml.findall('*'):
             context = _USD_export_shadertree(stage, newpath, context, child)
 
@@ -916,7 +927,11 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
     Parameters:
         stage (Usd.Stage): The USD stage where the shader will be defined.
         material (UsdShade.Material): The material to which the shader will be connected.
-        xml (ET.Element): An XML element containing shader channel data.
+        xml (ET.Element): The normalized XML element containing shader channel data - each channel
+            carries a `usdValue` (gtr/principled-overridden where normalize_specular_ior applies, a
+            straight copy of the raw Modo `value` otherwise). Both the mtlx shader and the glPreview
+            shader read `usdValue`: UsdPreviewSurface models specular/IOR the same way the mtlx BRDFs
+            do, so it needs the same corrected value, not the raw Modo one.
         isPreview (bool): Flag indicating if the shader is a preview shader.
 
     Returns:
@@ -951,12 +966,9 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
         # Convert the channel name to its usdstandard_material equivalent input
         
         modoInputName = channel.tag
-        usdValue = channel.get('value')
-        
+        usdValue = channel.get('usdValue')
+
         usdInputName = _UTIL_get_mapped_channel(modoInputName, xml.get('type'), brdfType)
-        # print(usdInputName)
-        if not isPreview:
-            usdValue = _USD_apply_overrides(usdValue, brdfType, modoInputName, xml)
         if usdInputName != None:
             input = _USD_create_shader_input(shader, usdInputName, usdValue, usdTypeMap[usdInputName])
     
@@ -965,116 +977,6 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
     surfaceTerminal.ConnectToSource(shaderOutPort)
     
     return shader
-
-# IOR approximation from specular amount; saturation<1 keeps the sqrt argument <1 (avoids div-by-zero at specAmt==1)
-def _USD_ior_from_spec_amt(specAmt:float, saturation:float=.99999) -> float:
-    return 2 / (1 - math.sqrt(specAmt * saturation)) - 1
-
-# Maps x toward 1 as x grows past 1; k controls how fast it saturates. Approximation based on observation.
-def _USD_saturating_curve(x:float, k:float) -> float:
-    return 1 - (1 / (k * (x - 1) + 1))
-
-# Blends white toward diffCol by specTint, normalized so the brightest channel stays at/below 1
-def _USD_tinted_spec_color(diffCol, specTint:float):
-    dr, dg, db = diffCol
-    #----------------------- Normalize and add
-    m = max(dr, dg, db)
-    if m == 0:
-        return (1.0, 1.0, 1.0)
-    sr = 1 + (dr / m) * specTint
-    sg = 1 + (dg / m) * specTint
-    sb = 1 + (db / m) * specTint
-    print("normalized add = (%f, %f, %f) max = %f" % (sr,sg,sb,m))
-
-    #----------------------- Clamp below 1
-    m = max(sr, sg, sb) - 1
-    fr = sr - m
-    fg = sg - m
-    fb = sb - m
-    print("n col = (%f, %f, %f) max = %f" % (fr,fg,fb,m))
-    return (fr, fg, fb)
-
-# Apply overrides when things are specific to how the shaderTree works (multiple options due to legacy and updates)
-def _USD_apply_overrides(usdValue:str, brdfType:str, modoInputName:str, xml:ET.Element) -> Union[str, None]:
-    """
-    Apply overrides to a given USD value based on the BRDF type and Modo input name.
-
-    This function modifies the USD value according to specific rules defined for
-    different BRDF types ('gtr' and 'principled') and Modo input names. It uses
-    values from an XML element to determine the necessary transformations.
-
-    Parameters:
-        usdValue (str): The original USD value to be potentially overridden.
-        brdfType (str): The type of BRDF ('gtr' or 'principled') to determine the
-                        override logic.
-        modoInputName (str): The name of the Modo input channel to apply the
-                            override to.
-        xml (ET.Element): An XML element containing channel data used for
-                        determining overrides.
-
-    Returns:
-        str | None: The overridden USD value if changes were made, otherwise the
-                    original value.
-    """
-    #---------------------------------------------------- Get useRefIdx value for remapping
-    useRefIdx = (xml.find('channels/useRefIdx').get('value')=="1")
-    specRefIdx = (xml.find('channels/specRefIdx').get('value')=="1")
-
-    originalValue = usdValue
-
-    if brdfType == "gtr":
-        if modoInputName == 'disperse':
-            disperseValue = float(originalValue)
-            if disperseValue != 0: usdValue = abs(.1/float(disperseValue))
-
-        if modoInputName == 'tranRough': usdValue = float(originalValue) * 2
-
-        if useRefIdx:
-            if modoInputName == 'specAmt': usdValue = "1.0"
-        else:
-            if modoInputName == 'specAmt': usdValue = "1.0"
-
-            if modoInputName == 'refIndex':
-                specAmnt = float(xml.find('channels/specAmt').get('value'))
-                usdValue = _USD_ior_from_spec_amt(specAmnt)
-
-    elif brdfType == "principled":
-        if useRefIdx:
-            specAmnt = float(xml.find('channels/specAmt').get('value'))
-            refIdx = float(xml.find('channels/refIndex').get('value'))
-            if specRefIdx:
-                x = _USD_ior_from_spec_amt(specAmnt, .8) # avoid division by zero
-                k = 100 # magic number, determine how fast the value reaches 1 when refIdx > 1
-                if modoInputName == 'specAmt': usdValue = _USD_saturating_curve(x, k)
-                if modoInputName == 'refIndex': usdValue = x
-
-            else:
-                x = refIdx
-                k = 20 # magic number, determine how fast the value reaches 1 when refIdx > 1
-                if modoInputName == 'specAmt': usdValue = _USD_saturating_curve(x, k)
-                if modoInputName == 'refIndex': usdValue = refIdx
-
-        else:
-            specAmnt = float(xml.find('channels/specAmt').get('value'))
-            refIdx = float(xml.find('channels/refIndex').get('value'))
-            if modoInputName == 'specAmt': usdValue = 1.0
-            if modoInputName == 'refIndex': usdValue = _USD_ior_from_spec_amt(specAmnt)
-
-            if modoInputName == 'specTint': usdValue = xml.find('channels/specTint').get('value')
-
-        if modoInputName == 'specCol':
-            diffCol = eval(xml.find('channels/diffCol').get('value'))
-            specTint = float(xml.find('channels/specTint').get('value'))
-            usdValue = str(_USD_tinted_spec_color(diffCol, specTint))
-
-        if modoInputName == 'sheenTint':
-            sheenTint = float(usdValue)
-            usdValue = str((sheenTint, sheenTint, sheenTint))
-
-    if  usdValue != originalValue:
-        if (verbose and verbose_override_value):print("🔀 Overrided value : %s from %s to %s " % (modoInputName, originalValue, usdValue))
-        _diag("applyOverrides", f"{xml.get('name')}", f"{modoInputName} from {originalValue} to {usdValue}")
-    return usdValue
 
 # Create USD Shader input according to modo channel scopped
 def _USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input:

@@ -1,10 +1,14 @@
 import copy
 import math
 
-# Ported from ShaderTree.py's USD_apply_overrides (now _USD_apply_overrides), which computes the same
-# values on the fly, once per channel, during USD construction. This pass resolves them once, up front,
-# and writes them back into the XML so stage 3 no longer needs to know about gtr/principled specifics.
-# _USD_apply_overrides itself is left untouched for now (progressive migration - see CLAUDE.md).
+# Ported from ShaderTree.py's former USD_apply_overrides, which computed the same values on the fly,
+# once per channel, during USD construction (that function and its helpers were removed once this pass
+# was wired in - see _USD_export_shadertree/_USD_create_mtlx_standard_surface_shader).
+#
+# Every channel under an advancedMaterial's <channels> gets a `usdValue` attribute, alongside its raw
+# Modo `value`: the gtr/principled-overridden value where one applies, a straight copy of `value`
+# otherwise. Both the mtlx shader and the glPreview shader (UsdPreviewSurface) read `usdValue` -
+# construction code never needs to know which channels are override-eligible.
 
 # IOR approximation from specular amount; saturation<1 keeps the sqrt argument <1 (avoids div-by-zero at specAmt==1)
 def _ior_from_spec_amt(specAmt, saturation=.99999):
@@ -28,9 +32,10 @@ def _tinted_spec_color(diffCol, specTint):
 
 
 def normalize_specular_ior(xml):
-    """Rewrites specAmt/refIndex/disperse/tranRough/specCol/sheenTint to USD-ready values on every
-    advancedMaterial node, according to its brdfType (gtr/principled). Pure transformation, XML -> XML:
-    returns a new tree, the input is left untouched."""
+    """Adds a usdValue attribute to every channel of every advancedMaterial node: specAmt/refIndex/
+    disperse/tranRough/specCol/sheenTint get their gtr/principled-overridden value (per brdfType), every
+    other channel gets a plain copy of its raw value. Pure transformation, XML -> XML: returns a new
+    tree, the input is left untouched."""
     xml = copy.deepcopy(xml)
     for material in xml.iter('advancedMaterial'):
         _normalize_material(material)
@@ -38,14 +43,21 @@ def normalize_specular_ior(xml):
 
 
 def _normalize_material(material):
+    # Every channel always gets a usdValue, even if there's no channels/brdfType to compute overrides
+    # from (missing channels element, or no brdfType - shouldn't normally happen, but construction code
+    # unconditionally reads usdValue, so it must never be left unset).
     channels = material.find('channels')
     if channels is None:
         return
-    brdfTypeEl = channels.find('brdfType')
-    if brdfTypeEl is None:
-        return
-    brdfType = brdfTypeEl.get('value')
 
+    brdfTypeEl = channels.find('brdfType')
+    updates = _compute_overrides(brdfTypeEl.get('value'), channels) if brdfTypeEl is not None else {}
+
+    for channel in channels:
+        channel.set('usdValue', str(updates.get(channel.tag, channel.get('value'))))
+
+
+def _compute_overrides(brdfType, channels):
     def raw(name):
         el = channels.find(name)
         return el.get('value') if el is not None else None
@@ -107,7 +119,4 @@ def _normalize_material(material):
             st = float(sheenTint)
             updates['sheenTint'] = str((st, st, st))
 
-    for name, value in updates.items():
-        el = channels.find(name)
-        if el is not None:
-            el.set('value', str(value))
+    return updates

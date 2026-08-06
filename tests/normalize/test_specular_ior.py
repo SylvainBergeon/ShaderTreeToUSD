@@ -14,8 +14,12 @@ def make_material(name="Mat1", **channel_values):
     return material
 
 
-def channel(material, name):
+def raw_value(material, name):
     return material.find(f'channels/{name}').get('value')
+
+
+def usd_value(material, name):
+    return material.find(f'channels/{name}').get('usdValue')
 
 
 def ior_from_spec_amt(specAmt, saturation=.99999):
@@ -33,8 +37,8 @@ class TestGtr:
 
         result = normalize_specular_ior(material)
 
-        assert channel(result, 'specAmt') == "1.0"
-        assert channel(result, 'refIndex') == "1.5" # untouched: only used when useRefIdx is off
+        assert usd_value(result, 'specAmt') == "1.0"
+        assert usd_value(result, 'refIndex') == "1.5" # untouched: only used when useRefIdx is off
 
     def test_no_ref_idx_derives_ref_index_from_original_spec_amt(self):
         material = make_material(brdfType="gtr", useRefIdx="0", specRefIdx="0",
@@ -42,8 +46,8 @@ class TestGtr:
 
         result = normalize_specular_ior(material)
 
-        assert channel(result, 'specAmt') == "1.0"
-        assert float(channel(result, 'refIndex')) == pytest.approx(ior_from_spec_amt(0.4))
+        assert usd_value(result, 'specAmt') == "1.0"
+        assert float(usd_value(result, 'refIndex')) == pytest.approx(ior_from_spec_amt(0.4))
 
     def test_disperse_and_tran_rough(self):
         material = make_material(brdfType="gtr", useRefIdx="1", specRefIdx="0",
@@ -52,8 +56,8 @@ class TestGtr:
 
         result = normalize_specular_ior(material)
 
-        assert float(channel(result, 'disperse')) == pytest.approx(abs(.1 / 0.2))
-        assert float(channel(result, 'tranRough')) == pytest.approx(0.3 * 2)
+        assert float(usd_value(result, 'disperse')) == pytest.approx(abs(.1 / 0.2))
+        assert float(usd_value(result, 'tranRough')) == pytest.approx(0.3 * 2)
 
     def test_disperse_zero_is_left_alone_to_avoid_division_by_zero(self):
         material = make_material(brdfType="gtr", useRefIdx="1", specRefIdx="0",
@@ -61,7 +65,7 @@ class TestGtr:
 
         result = normalize_specular_ior(material)
 
-        assert channel(result, 'disperse') == "0"
+        assert usd_value(result, 'disperse') == "0"
 
 
 class TestPrincipled:
@@ -72,8 +76,8 @@ class TestPrincipled:
         result = normalize_specular_ior(material)
 
         x = ior_from_spec_amt(0.4, .8)
-        assert float(channel(result, 'specAmt')) == pytest.approx(saturating_curve(x, 100))
-        assert float(channel(result, 'refIndex')) == pytest.approx(x)
+        assert float(usd_value(result, 'specAmt')) == pytest.approx(saturating_curve(x, 100))
+        assert float(usd_value(result, 'refIndex')) == pytest.approx(x)
 
     def test_use_ref_idx_without_spec_ref_idx_keys_off_ref_idx_directly(self):
         material = make_material(brdfType="principled", useRefIdx="1", specRefIdx="0",
@@ -81,8 +85,8 @@ class TestPrincipled:
 
         result = normalize_specular_ior(material)
 
-        assert float(channel(result, 'specAmt')) == pytest.approx(saturating_curve(1.5, 20))
-        assert float(channel(result, 'refIndex')) == pytest.approx(1.5)
+        assert float(usd_value(result, 'specAmt')) == pytest.approx(saturating_curve(1.5, 20))
+        assert float(usd_value(result, 'refIndex')) == pytest.approx(1.5)
 
     def test_no_ref_idx_forces_full_specular_and_derives_ref_index(self):
         material = make_material(brdfType="principled", useRefIdx="0", specRefIdx="0",
@@ -90,8 +94,8 @@ class TestPrincipled:
 
         result = normalize_specular_ior(material)
 
-        assert channel(result, 'specAmt') == "1.0"
-        assert float(channel(result, 'refIndex')) == pytest.approx(ior_from_spec_amt(0.4))
+        assert usd_value(result, 'specAmt') == "1.0"
+        assert float(usd_value(result, 'refIndex')) == pytest.approx(ior_from_spec_amt(0.4))
 
     def test_spec_col_is_tinted_towards_diffuse_color(self):
         material = make_material(brdfType="principled", useRefIdx="0", specRefIdx="0",
@@ -100,7 +104,7 @@ class TestPrincipled:
 
         result = normalize_specular_ior(material)
 
-        r, g, b = eval(channel(result, 'specCol'))
+        r, g, b = eval(usd_value(result, 'specCol'))
         assert r == pytest.approx(1.0) # brightest channel of diffCol stays saturated at 1
         assert 0 < b < g < r
 
@@ -111,7 +115,7 @@ class TestPrincipled:
 
         result = normalize_specular_ior(material)
 
-        assert eval(channel(result, 'specCol')) == (1.0, 1.0, 1.0)
+        assert eval(usd_value(result, 'specCol')) == (1.0, 1.0, 1.0)
 
     def test_sheen_tint_is_expanded_to_a_grey_triplet(self):
         material = make_material(brdfType="principled", useRefIdx="0", specRefIdx="0",
@@ -120,7 +124,16 @@ class TestPrincipled:
 
         result = normalize_specular_ior(material)
 
-        assert eval(channel(result, 'sheenTint')) == (0.3, 0.3, 0.3)
+        assert eval(usd_value(result, 'sheenTint')) == (0.3, 0.3, 0.3)
+
+    def test_channel_with_no_override_rule_gets_usd_value_copied_from_raw_value(self):
+        material = make_material(brdfType="principled", useRefIdx="0", specRefIdx="0",
+                                  specAmt="0.4", refIndex="1.5", diffCol="(0.5,0.5,0.5)", specTint="0",
+                                  diffAmt="0.9")
+
+        result = normalize_specular_ior(material)
+
+        assert usd_value(result, 'diffAmt') == "0.9"
 
 
 class TestStructural:
@@ -130,8 +143,18 @@ class TestStructural:
 
         normalize_specular_ior(material)
 
-        assert channel(material, 'specAmt') == "0.4"
-        assert channel(material, 'refIndex') == "1.5"
+        assert raw_value(material, 'specAmt') == "0.4"
+        assert raw_value(material, 'refIndex') == "1.5"
+        assert material.find('channels/specAmt').get('usdValue') is None
+
+    def test_raw_value_is_never_overwritten_even_where_usd_value_differs(self):
+        material = make_material(brdfType="gtr", useRefIdx="0", specRefIdx="0",
+                                  specAmt="0.4", refIndex="1.5")
+
+        result = normalize_specular_ior(material)
+
+        assert raw_value(result, 'specAmt') == "0.4" # raw value untouched
+        assert usd_value(result, 'specAmt') == "1.0" # usdValue carries the override
 
     def test_materials_nested_anywhere_in_the_tree_are_normalized(self):
         root = ET.Element('polyRender')
@@ -143,15 +166,25 @@ class TestStructural:
         result = normalize_specular_ior(root)
 
         found = result.find('.//advancedMaterial')
-        assert channel(found, 'specAmt') == "1.0"
+        assert usd_value(found, 'specAmt') == "1.0"
 
-    def test_material_without_brdf_type_is_left_alone(self):
-        material = ET.Element('advancedMaterial', {'name': 'NoBrdf'})
-        ET.SubElement(material, 'channels')
+    def test_material_without_brdf_type_still_gets_usd_value_on_every_channel(self):
+        # Construction code unconditionally reads usdValue - if this material is somehow missing its
+        # brdfType channel, every other channel must still get a usdValue (a copy of its raw value),
+        # instead of crashing construction downstream with a None usdValue.
+        material = make_material(diffAmt="0.9")
 
         result = normalize_specular_ior(material) # must not raise
 
         assert result.find('channels/brdfType') is None
+        assert usd_value(result, 'diffAmt') == "0.9"
+
+    def test_material_without_channels_element_is_left_alone(self):
+        material = ET.Element('advancedMaterial', {'name': 'NoChannels'})
+
+        result = normalize_specular_ior(material) # must not raise
+
+        assert result.find('channels') is None
 
     def test_non_material_elements_are_ignored(self):
         root = ET.Element('polyRender')
