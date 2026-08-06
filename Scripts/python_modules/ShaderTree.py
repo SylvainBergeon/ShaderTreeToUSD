@@ -121,7 +121,7 @@ def _diag(sectionName:str, diagElementName:str, diagtext:str):
 def _initialize_preferences():
     """Initialize global variables with user preferences."""
     global consolidateScene, exportGlPreviewMaterial
-    global export_json, export_xml, export_usda, export_usd, export_usdz, export_diagnostic
+    global export_json, export_xml, export_usda, export_usd, export_diagnostic
     global verbose, verbose_set_value, verbose_create_shader
     global verbose_override_value, verbose_modify_tree
     global verbose_consolidate, verbose_unsupported

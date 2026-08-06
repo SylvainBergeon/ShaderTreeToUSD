@@ -61,7 +61,6 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
             'USDExport_export_xml': False,
             'USDExport_export_usd': True,
             'USDExport_export_usda': False,
-            'USDExport_export_usdz': False,
             'USDExport_consolidateScene': False,
             'USDExport_saveDiagnostic': True,
             #---------------------------------------------------- Event log message
