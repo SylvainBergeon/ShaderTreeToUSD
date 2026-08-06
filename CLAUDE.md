@@ -86,9 +86,9 @@ identique + deux corrections :
 **Convention de nommage étendue à tout le module** : `export_basic_execute()`
 est le **seul** point d'entrée appelé depuis l'extérieur du module (par
 `ExportShaderTree.py`). Toutes les autres fonctions du module ont été
-préfixées `_` + domaine : `_USD_*`, `_XML_*`, `_JSON_*`, `_UTIL_*` (ou juste
-`_` pour les fonctions transverses aux domaines : `_diag`,
-`_initialize_preferences`).
+préfixées `_` + domaine : `_USD_*`, `_XML_*`, `_JSON_*`, `_UTIL_*`, `_DEBUG_diag`
+(génère le fichier diagnostic XML), ou juste `_` pour les fonctions
+transverses restantes : `_initialize_preferences`.
 
 ## Étage 2 — FAIT : module de normalisation
 
