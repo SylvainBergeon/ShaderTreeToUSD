@@ -10,21 +10,42 @@ ST = None
 SF = None
 
 try:
-    from importlib import reload
+    from importlib import reload, import_module
 except ImportError:
     from imp import reload
+    from importlib import import_module
+
+# ShaderTree imports from these (`from .normalize import normalize as normalize_shadertree`), but
+# reload(ST) only re-executes ShaderTree.py itself, not the modules it imports - so without reloading
+# these explicitly first, edits under normalize/ would need a Modo restart to take effect, unlike
+# ShaderTree.py/ShaderFilters.py. Submodules first, package __init__.py last, so the package's
+# `from .specular_ior import ...`-style lines rebind to the freshly reloaded submodules.
+NORMALIZE_MODULES = [
+    "python_modules.normalize.specular_ior",
+    "python_modules.normalize.blend_operators",
+    "python_modules.normalize.projection_defaults",
+    "python_modules.normalize.effect_channel_names",
+    "python_modules.normalize.node_registry",
+    "python_modules.normalize",
+]
 
 def reload_modules():
     global ST, SF
-    if ST is not None:
-        reload(ST)
-    else:
-        import python_modules.ShaderTree as ST
+    for module_name in NORMALIZE_MODULES:
+        if module_name in sys.modules:
+            reload(sys.modules[module_name])
+        else:
+            import_module(module_name)
 
     if SF is not None:
         reload(SF)
     else:
         import python_modules.ShaderFilters as SF
+
+    if ST is not None:
+        reload(ST)
+    else:
+        import python_modules.ShaderTree as ST
 
 class Cmd_ExportShaderTree(lxu.command.BasicCommand):
 
