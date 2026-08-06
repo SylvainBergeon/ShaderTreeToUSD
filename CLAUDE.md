@@ -6,7 +6,8 @@ puis le travail effectué dans Claude Code pour la mettre en œuvre. Il sert de
 point de reprise : lis-le avant de proposer des changements pour rester
 cohérent avec la direction déjà validée par l'auteur du projet.
 
-**Dernière mise à jour : 2026-08-06, après les étapes 1 et 2 (voir plus bas).**
+**Dernière mise à jour : 2026-08-07. Les 3 étages du pipeline sont câblés de
+bout en bout et validés dans Modo (voir plus bas).**
 
 ## Le projet
 
@@ -20,31 +21,44 @@ Modo <-> USD).
 `fnpxr` = nom donné par Foundry à sa copie interne des bindings Python de
 Pixar USD (`pxr`). Fonctionnellement identique à `pxr` standard.
 
+Vocabulaire XML du shader tree (confirmé par l'auteur) :
+- `<advancedMaterial/>` = le nœud shader (BRDF) lui-même, ex. MtlX Standard
+  Surface.
+- `<mask/>` = le vrai "matériau" au sens USD : un groupe de couches
+  d'opérateurs, assigné à un groupe de polygones du même nom (via `ptag`).
+  Plusieurs couches (`imageMap`/`noise`/`constant`) visant le même `effect`
+  s'empilent et s'évaluent en cascade selon leur `blend`, dans l'ordre où
+  elles apparaissent sous le `<mask>`.
+- `<channels>` = conteneur générique des paramètres de l'élément parent, quel
+  que soit son tag. Tous les canaux Modo d'un item y sont exportés, mais
+  seul un sous-ensemble a un équivalent USD (le reste est silencieusement
+  ignoré par `_UTIL_get_mapped_channel`, qui retourne `None` — c'est voulu,
+  ne pas essayer de "tout traduire mécaniquement").
+
 ## Environnement de dev
 
 - Le repo est un kit Modo chargeable directement depuis ce dossier (présence
   d'`index.cfg` à la racine) : pas besoin de packager en `.lpk` pour
   développer, `build_lpk.py` sert uniquement à la distribution.
 - `ExportShaderTree.py` appelle `reload_modules()` à chaque exécution de la
-  commande dans Modo -> `ShaderTree.py`, `ShaderFilters.py`, et maintenant
-  **tout le package `Scripts/python_modules/normalize/`** sont rechargés à
-  chaud depuis le disque (voir "Étage 2" plus bas — ce rechargement du
-  package `normalize` a dû être ajouté explicitement, `reload()` ne
-  descendant pas automatiquement dans les modules importés). Seul
-  `ExportShaderTree.py` lui-même nécessite un restart de Modo si modifié.
+  commande dans Modo -> `ShaderTree.py`, `ShaderFilters.py`, et **tout le
+  package `Scripts/python_modules/normalize/`** (5 sous-modules + le package
+  lui-même) sont rechargés à chaud depuis le disque. Seul
+  `ExportShaderTree.py` lui-même nécessite un restart de Modo si modifié
+  (piège vécu en session : un fix dans ce fichier n'était pas actif tant que
+  Modo n'avait pas redémarré, alors que tout le reste rechargeait bien).
 - `.vscode/settings.json` configure l'analyse statique (stubs `lx`/`modo`,
   `extraPaths` vers le Python de Modo, résolution `pxr`). Ça ne permet pas
   d'exécuter le code Modo-dépendant, juste de l'éditer avec autocomplétion.
-- **`.venv/` est maintenant un vrai environnement de dev/test** : `pytest`
-  (pour `Scripts/python_modules/normalize/`, zéro dépendance Modo) et
-  `MaterialX` (paquet PyPI officiel, utilisé uniquement par l'outil
+- **`.venv/` est un vrai environnement de dev/test** : `pytest` (pour
+  `Scripts/python_modules/normalize/`, zéro dépendance Modo) et `MaterialX`
+  (paquet PyPI officiel, utilisé uniquement par
   `Scripts/python_modules/normalize/tools/generate_node_registry.py` pour
   interroger la vraie librairie standard MaterialX) y sont installés. `lx`/
   `modo`/`fnpxr` restent absents — impossible d'exécuter le code Modo-
   dépendant (`ShaderTree.py`, `ShaderFilters.py`, `ExportShaderTree.py`) hors
-  Modo.
-- `__pycache__/` et `.pytest_cache/` sont dans `.gitignore` — ne plus les
-  committer (des `.pyc` trainaient dans l'historique, ils ont été untrack).
+  Modo ; `usd-core` est aussi installé mais **n'inclut pas `UsdMtlx`**.
+- `__pycache__/` et `.pytest_cache/` sont dans `.gitignore`.
 - **Convention de commit** : les commits faits par Claude Code dans ce repo
   sont préfixés `CLAUDE_` dans leur titre, pour les distinguer des commits
   faits directement par l'auteur.
@@ -54,154 +68,221 @@ Pixar USD (`pxr`). Fonctionnellement identique à `pxr` standard.
 Le point de douleur signalé par l'auteur : **le traitement des cas
 particuliers est trop complexe**, en particulier dans `ShaderTree.py`.
 `USD_export_shadertree()` (fonction principale, parcours récursif de l'arbre)
-mélangeait trois responsabilités dans la même passe :
+mélangeait trois responsabilités dans la même passe : parcours de l'arbre,
+interprétation métier (BRDF, blend, conversions specular/IOR, résolution des
+noms d'effet...), et appels effectifs à l'API USD.
 
-1. parcours de l'arbre (dispatch par tag XML)
-2. interprétation métier (quel BRDF, quel type de blend, conversions
-   physiques specular/IOR, résolution des noms d'effet...)
-3. appels effectifs à l'API USD (`UsdShade`, `Sdf`)
-
-Direction validée : pipeline en 3 étages.
+Direction validée, maintenant en place :
 
 ```
 Modo (item tree)  -->  XML brut          -->  XML canonique       -->  Stage USD
-  XML_export_item()      (existe)              (FAIT)                  (PAS ENCORE branché)
+  XML_export_item()      (existe)          normalize.normalize()      construction lit
+                                            (Scripts/python_modules/    le XML normalisé
+                                             normalize/, FAIT)          (FAIT, câblé)
 ```
 
-## Étage 1 — FAIT : refactor local de deux fonctions
+## Étage 1 — FAIT : refactor local + convention de nommage
 
-`_USD_apply_overrides` (conversions specular/IOR selon le BRDF gtr/principled)
-et `_USD_connect_operator` (connexion des opérateurs de blend) sont
-refactorisées dans `Scripts/python_modules/ShaderTree.py`, comportement
-identique + deux corrections :
-- `_USD_apply_overrides` : suppression d'une ligne morte (`specCol` assigné
-  puis toujours écrasé juste après), et protection division par zéro sur
-  diffuse noir pur (dans `_USD_tinted_spec_color` — retourne blanc au lieu de
-  planter).
-- `_USD_connect_operator` : le pattern "connecter si `UsdShade.Output`, sinon
-  `eval()` + `Set()`" (dupliqué 3 fois) est extrait dans `_USD_set_or_connect`.
-  Les deux chemins (Multiply/Divide vs autres blends) partagent la création
-  du premier nœud.
+`_USD_apply_overrides` (conversions specular/IOR) et `_USD_connect_operator`
+(connexion des opérateurs de blend) ont été refactorisées avec un
+comportement identique, corrections mineures (ligne morte, division par
+zéro). **`_USD_apply_overrides` et ses helpers ont depuis été supprimés** —
+voir étage 2/3, remplacés par `normalize_specular_ior`.
 
 **Convention de nommage étendue à tout le module** : `export_basic_execute()`
 est le **seul** point d'entrée appelé depuis l'extérieur du module (par
-`ExportShaderTree.py`). Toutes les autres fonctions du module ont été
-préfixées `_` + domaine : `_USD_*`, `_XML_*`, `_JSON_*`, `_UTIL_*`, `_DEBUG_diag`
-(génère le fichier diagnostic XML), ou juste `_` pour les fonctions
-transverses restantes : `_initialize_preferences`.
+`ExportShaderTree.py`). Toutes les autres fonctions sont préfixées `_` +
+domaine : `_USD_*`, `_XML_*`, `_JSON_*`, `_UTIL_*`, `_DEBUG_diag` (voir
+"Logging" plus bas), ou juste `_` pour `_initialize_preferences`.
 
 ## Étage 2 — FAIT : module de normalisation
 
 `Scripts/python_modules/normalize/` contient 4 passes pures, `Element ->
 Element`, zéro dépendance `lx`/`modo`/`fnpxr`, testées avec pytest
-(`tests/normalize/`, 69 tests) :
+(`tests/normalize/`, 72 tests) :
 
-- **`normalize_specular_ior`** — migration de `_USD_apply_overrides`.
-- **`normalize_blend_operators`** — migration de `_USD_connect_operator` :
-  résout `channels/blend` en `usdOperator` (nom de nœud USD/MaterialX). Les
-  15 valeurs de blend Modo (`lx.symbol.sICVAL_TEXTURELAYER_BLEND_*`) sont
-  dupliquées en littéraux (obtenues en interrogeant une instance Modo réelle,
-  puisque `ShaderFilters.usdInputMap["blend"]` a ses clés indexées par ces
-  symboles `lx` et ne peut pas être importé hors Modo).
+- **`normalize_specular_ior`** — ajoute un attribut `usdValue` sur **tous**
+  les canaux de chaque `advancedMaterial` : valeur corrigée gtr/principled
+  quand une règle s'applique (specAmt/refIndex/disperse/tranRough/specCol/
+  sheenTint), copie brute de `value` sinon. `value` (brut) n'est jamais
+  modifié. **Important** : le shader glPreview (UsdPreviewSurface) lit aussi
+  `usdValue`, pas `value` — il modélise specular/IOR de la même façon que les
+  BRDF mtlx, donc il a besoin de la même valeur corrigée, pas de la valeur
+  Modo brute (décision validée par l'auteur, contre-intuitive au premier
+  abord).
+- **`normalize_blend_operators`** — résout `channels/blend` en `usdOperator`
+  (nom de nœud USD/MaterialX). Les 15 valeurs de blend Modo
+  (`lx.symbol.sICVAL_TEXTURELAYER_BLEND_*`) sont dupliquées en littéraux
+  (obtenues en interrogeant une instance Modo réelle, puisque
+  `ShaderFilters.usdInputMap["blend"]` a ses clés indexées par ces symboles
+  `lx`). `usdMixPattern` (dual/single) a été ajouté puis **retiré** : c'est
+  dérivable à la volée depuis `node_registry.py` (présence d'un input
+  `'mix'`), pas besoin de le dupliquer.
 - **`normalize_projection_defaults`** — résout `txtrLocator/channels/projType`
-  en `usdProjType`, avec fallback vers `"uv"` pour tout type non supporté
-  (miroir du fallback silencieux qui existait dans
-  `_USD_create_texture_output`).
+  en `usdProjType` (toujours `"uv"` ou `"triplanar"`, fallback vers `"uv"`
+  pour tout le reste).
 - **`normalize_effect_channel_names`** — résout `channels/effect` en
   `usdInputName` (table dupliquée depuis `ShaderFilters.usdInputMap['effect']`
-  — celle-ci a des clés en chaînes brutes, pas de dépendance `lx`, donc pas
-  besoin de requête Modo pour la copier).
+  — clés en chaînes brutes, pas de dépendance `lx`).
 
-Toutes les passes sont **non-destructives** (retournent une copie) : c'est
-volontaire, car `_USD_create_mtlx_standard_surface_shader` construit le
-shader glPreview et le shader mtlx à partir du **même** XML source, et le
-preview a besoin des valeurs brutes (pas des overrides gtr/principled).
+Toutes les passes sont **non-destructives** (retournent une copie) et
+n'écrivent que des attributs en plus (`usd*`), jamais en place sur `value`
+(sauf `normalize_specular_ior` qui écrit `usdValue`, un attribut séparé —
+`value` reste toujours intact).
 
 **`Scripts/python_modules/normalize/node_registry.py`** : catalogue statique
 des ~60 nœuds USD/MaterialX réellement utilisés dans `ShaderTree.py` (inputs
 nommés + types + type de sortie), généré depuis la vraie librairie standard
-MaterialX via `Scripts/python_modules/normalize/tools/generate_node_registry.py`
-(à relancer si un nouveau `CreateIdAttr(...)` apparaît dans `ShaderTree.py`).
-Ça a permis de **confirmer** que le découpage `multiply`/`divide` (2 nœuds,
-`in1`/`in2`) vs les 8 autres blends (1 nœud, `fg`/`bg`/`mix`) était correct
-— d'où la suppression de l'attribut `usdMixPattern` qui le codait à la main
-dans `normalize_blend_operators` : c'est maintenant dérivable à la volée
-depuis `node_registry.py` (présence d'un input `'mix'`) plutôt que dupliqué.
+MaterialX via `tools/generate_node_registry.py` (à relancer si un nouveau
+`CreateIdAttr(...)` apparaît). A servi à **confirmer** que le découpage
+multiply/divide (in1/in2) vs les 8 autres blends (fg/bg/mix) était correct.
+**Pas branché à un mécanisme générique de reconnexion** — décision prise en
+session : le rester tant qu'aucun nouveau nœud ne casse le découpage actuel
+codé en dur dans `_USD_connect_operator`. Pas la peine de généraliser dans
+l'abstrait sans cas concret.
 
-**Deux bugs trouvés et corrigés pendant ce travail** (pas des régressions
-introduites, des bugs pré-existants révélés par le cross-check) :
-1. `ShaderTree.py:867` créait un nœud `"ND_normalmap"` — id invalide,
-   n'existe pas dans MaterialX (seuls `ND_normalmap_float`/`_vector2`
-   existent). Corrigé en `ND_normalmap_float` (`scale` y est réglé comme un
-   float simple).
-2. `reload_modules()` dans `ExportShaderTree.py` ne rechargeait que `ST`
-   (ShaderTree) et `SF` (ShaderFilters) — les modifs sous `normalize/`
-   étaient ignorées jusqu'à un restart de Modo. Corrigé : le package
-   `normalize` et ses 5 sous-modules sont rechargés explicitement (sous-
-   modules d'abord, `__init__.py` du package ensuite) avant `ST`.
+## Étage 3 — FAIT : câblage dans la construction USD réelle
 
-**Rien de tout ça n'est encore branché dans la construction USD réelle** —
-`_USD_export_shadertree`, `_USD_apply_overrides`, `_USD_connect_operator`
-etc. sont inchangés et continuent à faire le travail "à la volée" comme
-avant. Seul ajout côté export : `export_basic_execute()` calcule
-`xml_shadertree_normalized` (XML passé dans les 4 passes) et le sauvegarde à
-part (`<nom>_normalized.xml`) quand l'export XML est actif, pour comparaison
-manuelle avec le XML brut — pas encore utilisé pour la construction USD
-elle-même.
+Les 4 passes sont branchées. `export_basic_execute()` calcule
+`xml_shadertree_normalized = normalize_shadertree(xml_shadertree)`
+(inconditionnellement, plus seulement pour la comparaison XML), et
+`_USD_write_file`/`_USD_export_shadertree` ne travaillent plus qu'avec **ce
+seul arbre normalisé** — pas de double arbre threadé en parallèle : les
+passes écrivent des attributs en plus, jamais de suppression, donc un seul
+arbre suffit pour servir mtlx (lit `usdValue`/`usdOperator`/etc.) et
+glPreview (lit `value` brut, sauf pour specular/IOR — voir plus haut) à la
+fois.
+
+`_USD_apply_overrides` et ses 3 helpers (`_ior_from_spec_amt`,
+`_saturating_curve`, `_tinted_spec_color`) ont été **supprimés** de
+`ShaderTree.py` — code mort une fois `normalize_specular_ior` branché.
+`usdInputMap["blend"]`/`usdInputMap['effect']` ne sont plus consultés à la
+construction (seul `usdInputMap['uvTile']` reste utilisé, non couvert par une
+passe).
+
+Pour porter `usdInputName` jusqu'à `_USD_connect_effect_stack`/
+`_USD_connect_texture_output_to_shader_input` (qui ne voient que la clé
+`effectName`, pas l'élément XML), un nouveau `ShadingContext.effectUsdInputNames`
+(dict `effectName -> usdInputName`) a été ajouté, rempli dans
+`_USD_add_shader_connector_to_context`.
+
+`shaderConnector.blend` a été renommé `modoBlendOperator` (pendant Modo de
+`usdOperator`) — encore utilisé pour le diagnostic "non supporté" (où
+`usdOperator` est justement vide) et pour la comparaison `lx.symbol` qui
+choisit le câblage dual/single dans `_USD_connect_operator`.
+
+**Validé dans Modo sur le fichier d'exemple "PF_ShaderBall_base"** : topologie
+du nodegraph et valeurs des paramètres confirmées correctes, après les
+corrections ci-dessous.
+
+### Bugs trouvés et corrigés pendant les tests Modo
+
+Tous pré-existants ou introduits par le câblage lui-même, pas des régressions
+sur du code qui marchait avant — révélés par le test réel, impossible à
+détecter par pytest seul :
+
+1. **`ND_normalmap` → `ND_normalmap_float`** : id de nœud MaterialX invalide
+   (trouvé en croisant tous les `CreateIdAttr(...)` avec `node_registry.py`).
+2. **`reload_modules()` ne rechargeait pas `normalize/`** : corrigé (voir
+   "Environnement de dev").
+3. **Fuite de contexte entre masks** (le plus significatif) : dans
+   `_USD_export_shadertree`, `context.material`/`shader`/`previewShader`
+   n'étaient jamais restaurés après le traitement d'un `<mask>`. Un
+   `advancedMaterial` "nu" (sans mask, ex. un matériau de fallback) traité
+   juste après un mask frère héritait du `context.material` du mask
+   précédent au lieu d'être ignoré (`if context.material is None: return
+   context` ne couvrait que le tout premier passage) — il écrasait alors la
+   connexion `mtlx:surface` du mask. Corrigé par sauvegarde/restauration de
+   ces 3 champs autour du traitement d'un mask (pas juste un reset à `None`,
+   pour rester correct avec des masks imbriqués sans `ptag`). Comportement
+   validé par l'auteur : un `advancedMaterial` hors mask doit être **ignoré**
+   (pas de matériau de fallback implémenté — ce serait une nouvelle
+   fonctionnalité, pas ce bug-ci).
+4. **`_USD_apply_overrides` n'appliquait aucun override si `brdfType` était
+   absent** d'un `advancedMaterial` (retour anticipé qui sautait aussi le
+   fallback "copie la valeur brute"), laissant `usdValue` à `None` et
+   plantant `_USD_create_shader_input` (`float(None)`). Corrigé : le calcul
+   des overrides est isolé dans `_compute_overrides()`, et la boucle qui pose
+   `usdValue` sur chaque canal s'exécute toujours, indépendamment de ce que
+   `_compute_overrides` a pu résoudre.
+5. **`export_usdz` retiré** : préférence jamais reliée à une vraie
+   génération de `.usdz` (zip), sans UI, et référencée dans
+   `export_basic_execute()` sans jamais être assignée dans
+   `_initialize_preferences()` (`NameError` latent si `.usd`/`.usda` étaient
+   tous deux désactivés). Si un vrai export `.usdz` est voulu un jour :
+   partir de `_UTIL_copy_and_clean_files()` qui gère déjà la consolidation
+   des textures.
+6. **Bug de variable dans `_UTIL_copy_and_clean_files()`** : le message
+   diagnostic "moved to unused" référençait `newPath` (fuite d'une boucle
+   précédente) au lieu de `old_file`.
+
+## Logging — FAIT : consolidé dans `_DEBUG_diag()`
+
+`_diag` a été renommé `_DEBUG_diag` et généralisé : chaque appel imprime
+maintenant lui-même sur la console (si `verbose and verbose_modify_tree`)
+**et** enregistre dans le XML diagnostic (si `export_diagnostic`) — un seul
+appel par site au lieu d'un `if verbose: print(...)` + un appel `_DEBUG_diag`
+séparés partout.
+
+Les 5 sous-flags devenus inutiles une fois ce gate unique en place
+(`verboseSetValue`, `verboseCreateShader`, `verboseOverrideValue`,
+`verboseConsolidate`, `verboseUnsupported`) ont été **retirés entièrement** :
+globals Python, `_initialize_preferences()`, défauts dans
+`ExportShaderTree.py`, cases à cocher dans `Configs/preferences.CFG`. Ne
+restent que `verbose` et `verboseModifyTree`.
+
+Tous les `print()` redondants avec `_DEBUG_diag` ont été supprimés (~30
+sites), y compris des traces de debug brutes sans aucun pendant diag
+(`shaderConnector.dump()`, les traces dans `_USD_connect_effect_stack`/
+`_USD_connect_texture_output_to_shader_input`) — l'auteur a choisi de tout
+nettoyer plutôt que de garder du code mort, quitte à réintroduire des prints
+ciblés si un futur bug l'exige.
 
 ### Décisions encore ouvertes
 
-1. **Vocabulaire canonique** : toujours pas tranché formellement. Les passes
-   actuelles suivent la direction recommandée (garder les noms de balises/
-   canaux Modo, normaliser seulement les valeurs, ajouter des attributs
-   `usd*` en plus plutôt que renommer).
+1. **Vocabulaire canonique** : de facto tranché par la pratique — les 4
+   passes gardent les noms Modo et ajoutent des attributs `usd*` en plus,
+   jamais de renommage. Pas de validation formelle écrite ailleurs que ce
+   fichier, mais c'est le pattern suivi partout maintenant.
 2. **Où vivent les tables de `ShaderFilters.py`** : toujours ouvert
-   structurellement. Contournement actuel : les tables sans dépendance `lx`
-   (effect) ou nécessitant une requête Modo ponctuelle (blend) sont
-   **dupliquées** dans `normalize/`, avec commentaire pointant vers la
-   source — accepté comme compromis temporaire, pas une solution définitive
-   (risque de drift entre les deux copies si `ShaderFilters.py` change).
-3. **Migration progressive** : c'est le modèle suivi jusqu'ici — chaque passe
-   construite et testée indépendamment, `_USD_export_shadertree` non touché
-   tant que le câblage réel n'est pas décidé.
+   structurellement. Les tables `blend`/`effect` restent dupliquées dans
+   `normalize/` (risque de drift si `ShaderFilters.py` change) — à trancher
+   si ça devient un problème réel, pas avant.
+3. **Mécanisme générique de reconnexion (`node_registry.py`)** : volontairement
+   pas construit — voir étage 2. Revisiter seulement si un nouveau nœud ne
+   rentre plus dans le découpage dual/single actuel.
+4. **Lookup inverse dans `_USD_connect_effect_stack`** (fallback "pas de
+   texture connectée" → lit la valeur par défaut du matériau via
+   `stdMatChannelMap[...]['principled']`) : lit encore `value` (brut), pas
+   `usdValue`. Incohérence potentielle si ce fallback s'applique un jour à un
+   canal concerné par les overrides specular/IOR (specAmt, refIndex...) —
+   identifiée mais **pas corrigée**, laissée pour plus tard.
 
-## Exécution/tests hors Modo — FAIT pour l'étage 2
+## Exécution/tests hors Modo
 
 - `pytest` installé dans `.venv`, lancer avec `.venv/bin/python3 -m pytest`
   (config dans `pytest.ini` à la racine, `pythonpath = Scripts`).
-  `tests/normalize/` : 69 tests couvrant les 4 passes + le registre de
-  nœuds.
-- **Étage 3 (construction USD)** : toujours pas testé hors Modo. Reste
-  possible en installant `usd-core` (déjà fait dans `.venv` pour d'autres
-  besoins, mais **n'inclut pas `UsdMtlx`** — l'introspection MaterialX est
-  passée par le paquet PyPI `MaterialX` séparé, pas par `fnpxr`/`pxr`).
+  `tests/normalize/` : 72 tests couvrant les 4 passes + le registre de
+  nœuds. Zéro dépendance Modo.
+- **Étage 3 (construction USD)** : toujours pas testable hors Modo (pas de
+  shim `fnpxr`/`UsdMtlx` mis en place) — validation faite manuellement dans
+  Modo à chaque étape de câblage.
 - **Étage 1 (extraction Modo)** reste dépendant de l'interpréteur embarqué de
-  Modo. Pour du debug interactif dessus : `debugpy.listen()` côté Modo +
-  "Python Debugger: Remote Attach" côté VS Code.
+  Modo. Debug interactif : `debugpy.listen()` côté Modo + "Python Debugger:
+  Remote Attach" côté VS Code.
 
-## Prochaines étapes suggérées (à valider avec l'auteur avant de foncer)
+## Prochaines étapes possibles (aucune urgente, à discuter avec l'auteur)
 
-1. **Brancher les passes de normalisation dans la construction réelle** :
-   remplacer les appels à `_USD_apply_overrides`/`_USD_connect_operator`/etc.
-   dans `_USD_create_mtlx_standard_surface_shader`/`_USD_export_shadertree`
-   par une lecture du XML déjà normalisé. Commencer par une seule passe
-   (specular_ior, la plus isolée) plutôt que les 4 d'un coup. Cette
-   vérification-là ne peut plus se faire avec pytest seul : il faut tester
-   dans Modo et comparer un export avant/après sur un vrai shader tree pour
-   confirmer que le `.usda` produit est identique.
-2. **Concevoir le mécanisme générique de reconnexion des inputs** évoqué par
-   l'auteur : au lieu de coder à la main la forme de chaque opérateur USD
-   (comme le faisait `usdMixPattern`), utiliser `node_registry.py` pour
-   déterminer dynamiquement quels inputs connecter selon le nœud USD ciblé.
-   Pas commencé — juste l'infrastructure de données (`node_registry.py`)
-   est en place.
-3. **Trancher la décision n°2** (emplacement des tables `ShaderFilters.py`)
-   si la duplication actuelle devient un problème (une table modifiée dans
-   un seul des deux endroits).
-4. Seulement après : `normalize_projection_defaults`/
-   `normalize_effect_channel_names` sont déjà faits — simplifier
-   `USD_export_shadertree` pour qu'il devienne un simple walker générique
-   (étage 3) une fois que tout ce qui précède est branché.
+1. Trancher la décision n°2 (emplacement des tables `ShaderFilters.py`) si la
+   duplication devient gênante.
+2. Corriger le lookup inverse (décision n°4 ci-dessus) si un cas réel le
+   révèle nécessaire.
+3. Simplifier `_USD_export_shadertree` en vraie table de dispatch
+   (`tag -> builder`) maintenant que toute la logique métier en est sortie —
+   refactor mécanique à faible risque, pas encore fait faute de nécessité
+   immédiate.
+4. Mécanisme générique de reconnexion via `node_registry.py`, si un nouveau
+   nœud USD l'exige un jour.
 
-Ne pas réintroduire de logique de cas particulier dans l'étage 3 — c'est
-précisément ce que cette refonte cherche à éviter.
+Ne pas réintroduire de logique de cas particulier dans la construction USD —
+c'est précisément ce que cette refonte cherchait à éviter.
