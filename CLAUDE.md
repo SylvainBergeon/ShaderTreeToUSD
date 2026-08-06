@@ -271,6 +271,35 @@ ciblés si un futur bug l'exige.
   Modo. Debug interactif : `debugpy.listen()` côté Modo + "Python Debugger:
   Remote Attach" côté VS Code.
 
+## Export MaterialX natif (`.mtlx`) — exploré, abandonné (2026-08-07)
+
+Idée envisagée : ajouter une sortie `.mtlx` natif (XML, lisible par d'autres
+DCC comme Blender, indépendamment de l'USD). Investigation faite directement
+dans la console Python de Modo :
+
+- **`UsdMtlx` (via `fnpxr`) inutilisable pour ça** : le `plugInfo.json` du
+  plugin `UsdMtlxFileFormat` déclare explicitement `"supportsWriting": false`
+  — ce n'est pas une limite Foundry, c'est une limite générale du format côté
+  USD (support à l'écriture resté incomplet en amont). Le binding Python
+  (`_usdMtlx.so`) confirmé n'exposer que `_TestFile`/`_TestString` (des
+  utilitaires internes pour la découverte de fichiers par Sdr/Ndr), aucune
+  API de lecture/écriture de document MaterialX.
+- **Le paquet `MaterialX` autonome** (celui utilisé en dev pour générer
+  `node_registry.py`) **n'est pas installé** dans le Python embarqué de Modo
+  (`ModuleNotFoundError`). L'installer soi-même dans le Python de Modo serait
+  possible pour un usage personnel, mais ce kit est **destiné à être
+  distribué** à d'autres utilisateurs Modo — leur imposer d'installer un
+  paquet Python tiers (avec du code compilé, donc pas vendorable simplement
+  pour toutes les plateformes) dans leur Modo n'est pas réaliste.
+- Seule voie restante identifiée : écrire le XML `.mtlx` à la main avec
+  `ElementTree` (zéro dépendance), en réutilisant le XML déjà normalisé
+  (`usdValue`/`usdOperator`/etc.) et `node_registry.py`. Jugé disproportionné
+  par rapport au besoin actuel — **abandonné**, pas de code touché.
+
+Si l'idée revient un jour : ne pas re-tester `UsdMtlx`/`MaterialX` dans Modo,
+c'est déjà tranché ci-dessus. La question à se reposer est plutôt "est-ce que
+l'effort d'un sérialiseur `.mtlx` maison vaut le besoin réel à ce moment-là".
+
 ## Prochaines étapes possibles (aucune urgente, à discuter avec l'auteur)
 
 1. Trancher la décision n°2 (emplacement des tables `ShaderFilters.py`) si la
