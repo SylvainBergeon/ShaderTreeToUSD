@@ -7,6 +7,7 @@ import lxu.command
 
 # looks like we need this to keep referencing ST at module root
 ST = None
+SF = None
 
 try:
     from importlib import reload
@@ -14,11 +15,16 @@ except ImportError:
     from imp import reload
 
 def reload_modules():
-    global ST
+    global ST, SF
     if ST is not None:
         reload(ST)
     else:
         import python_modules.ShaderTree as ST
+
+    if SF is not None:
+        reload(SF)
+    else:
+        import python_modules.ShaderFilters as SF
 
 class Cmd_ExportShaderTree(lxu.command.BasicCommand):
 
@@ -32,7 +38,9 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
             #---------------------------------------------------- Export options
             'USDExport_export_json': False,
             'USDExport_export_xml': False,
-            'USDExport_export_usda': True,
+            'USDExport_export_usd': True,
+            'USDExport_export_usda': False,
+            'USDExport_export_usdz': False,
             'USDExport_consolidateScene': False,
             'USDExport_saveDiagnostic': True,
             #---------------------------------------------------- Event log message
@@ -65,7 +73,7 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
         return True
 
     def basic_Execute(self, msg, flags):
-        global ST    
+        global ST, SF    
         # reloads external modules - offloading to external module(s)makes development & debugging quicker since 
         # code edited in those modules does not require a re-start of modo to run. Only changes to this module 
         # require a restart.

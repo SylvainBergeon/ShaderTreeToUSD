@@ -21,7 +21,6 @@ filters [lx.symbol.sITYPE_ADVANCEDMATERIAL] = [
     "luminousAmt",
     "luminousCol",
     "metallic",
-    "specCol",
     "scatterAmt",
     "disperse",
     "tranRough",
@@ -137,10 +136,10 @@ usdInputMap = {
         "diffColor":"base_color",
         "diffAmount":"base",
         "rough":"specular_roughness",
-        "normal":"in",
+        "normal":"normal",
         "objectNormal":"in",
         "bump":"normal",
-        "stencil":"in",
+        "stencil":"opacity",
         "specAmount":"specular",
         "reflFresnel":"specular",
         "specFresnel":"specular",
@@ -168,7 +167,6 @@ usdInputMap = {
         #--------------------------------------------------- Maths
         lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY:"ND_multiply",
         lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE:"ND_divide",
-        #--------------------------------------------------- Maths
         lx.symbol.sICVAL_TEXTURELAYER_BLEND_NORMAL:"ND_mix",
         lx.symbol.sICVAL_TEXTURELAYER_BLEND_ADD:"ND_plus",
         lx.symbol.sICVAL_TEXTURELAYER_BLEND_SUBTRACT:"ND_minus",
@@ -221,6 +219,7 @@ usdTypeMap = {
     "normal":Sdf.ValueTypeNames.Vector3f,
     "in":Sdf.ValueTypeNames.Vector3f,
     "displacement":Sdf.ValueTypeNames.Float,
+    
     # ----------------------------------------- glPreview
     "diffuseColor":Sdf.ValueTypeNames.Color3f,
     "emissive":Sdf.ValueTypeNames.Float,
@@ -294,20 +293,20 @@ stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
         "tranCol":      "transmission_color",
         "tranDist":     "transmission_depth",
         "tranRough":    "transmission_roughness",
-        "stencil":      "opacity",
         
         # =============================================== SSS
         "subsAmt":      "subsurface",
         "subsCol":      "subsurface_color",
         "subsDepth":    "subsurface_radius",
         "subsDist":     "subsurface_scale",
+        
         # # =============================================== surface
+        "stencil":      "opacity",
         "normal":       "normal",
         "disp":         "displacement"
         },
     
     "gtr": { #----------------------------------- Mapping used for PBR shading mode
-        "opacity":      "opacity",
         # =============================================== BASE
         "diffAmt":      "base",
         "diffCol":      "base_color",

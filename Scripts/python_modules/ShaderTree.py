@@ -4,10 +4,15 @@
 import os, shutil
 import re, sys, math, json
 import lx, modo
-from typing import Union
+from typing import Union, cast
 from collections import OrderedDict
 from pathlib import Path
 from fnpxr import Sdf, Usd, UsdShade, UsdGeom
+
+import lxu.service
+import modo.dialogs
+import modo.item
+import modo.util
 
 from .ShaderFilters import usdInputMap
 from .ShaderFilters import usdTypeMap
@@ -72,6 +77,7 @@ exportGlPreviewMaterial = None
 export_json = None
 export_xml = None
 export_usda = None
+export_usd = None
 export_diagnostic = None
 verbose = None
 verbose_set_value = None
@@ -113,7 +119,7 @@ def diag(sectionName:str, diagElementName:str, diagtext:str):
 def initialize_preferences():
     """Initialize global variables with user preferences."""
     global consolidateScene, exportGlPreviewMaterial
-    global export_json, export_xml, export_usda, export_diagnostic
+    global export_json, export_xml, export_usda, export_usd, export_usdz, export_diagnostic
     global verbose, verbose_set_value, verbose_create_shader
     global verbose_override_value, verbose_modify_tree
     global verbose_consolidate, verbose_unsupported
@@ -122,6 +128,7 @@ def initialize_preferences():
     exportGlPreviewMaterial = lx.eval('user.value USDExport_exportGlPreviewMaterial ?')
     export_json = lx.eval('user.value USDExport_export_json ?')
     export_xml = lx.eval('user.value USDExport_export_xml ?')
+    export_usd = lx.eval('user.value USDExport_export_usd ?')
     export_usda = lx.eval('user.value USDExport_export_usda ?')
     export_diagnostic = lx.eval('user.value USDExport_saveDiagnostic ?')
     verbose = lx.eval('user.value USDExport_verbose ?')
@@ -173,7 +180,7 @@ def export_basic_execute(Cmd_obj, msg):
     if export_xml: XML_write_file(filename, xml_shadertree)
     
     #----------- as usda
-    if export_usda: USD_write_file(filename, xml_shadertree)
+    if export_usda or export_usd or export_usdz: USD_write_file(filename, xml_shadertree)
     
     #----------- Write diadnostic file
     if export_diagnostic:
@@ -380,19 +387,37 @@ def JSON_get_channels(item:modo.Item):
 # Write the data as USDA
 def USD_write_file(filename:str, xml:ET.Element):
     print(f"saving usd ... {filename}")
-    
-    stage = Usd.Stage.CreateNew(filename + '.usda')
-    
+
+    output_files = []
+    if export_usda:
+        output_files.append(filename + '.usda')
+    if export_usd:
+        output_files.append(filename + '.usd')
+
+    if not output_files:
+        return
+
+    stage = Usd.Stage.CreateInMemory()
     context = ShadingContext()
     context = USD_export_shadertree(stage, "/shadertree", context, xml)
-    
-    if (stage.GetRootLayer().Save()):
-        print("✅ USD saved")
-        diag("Files", "Save", f"{os.path.basename(filename)}.usda saved succesfully !")
-    else:
+
+    saved_any = False
+    for output_file in output_files:
+        try:
+            if stage.Export(output_file):
+                print(f"✅ USD saved to {os.path.basename(output_file)}")
+                diag("Files", "Save", f"{os.path.basename(output_file)} saved succesfully !")
+                saved_any = True
+            else:
+                print(f"⁉️ USD not saved to {os.path.basename(output_file)}")
+                diag("Files", "Save", f"{os.path.basename(output_file)} NOT saved succesfully !")
+        except Exception as exc:
+            print(f"⁉️ USD export failed for {os.path.basename(output_file)}: {exc}")
+            diag("Files", "Save", f"{os.path.basename(output_file)} NOT saved succesfully ({exc})")
+
+    if not saved_any:
         print("⁉️ USD not saved")
-        diag("Files", "Save", f"{os.path.basename(filename)}.usda NOT saved succesfully !")
-    
+
     #----------- consolidate scene
     if consolidateScene:
         UTIL_copy_and_clean_files()
@@ -562,130 +587,6 @@ def USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xml
  
     return context
 
-# Connect an effect layer to the last created output for this stack
-def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
-    """
-    Connects a shader output to a specified input using a blend operator.
-
-    This function defines a shader operator based on the blend type and connects
-    the shader output to the input. It supports various blend effects and handles
-    opacity as a mix factor. If the blend effect is unsupported, it returns the
-    original output.
-
-    Parameters:
-        stage: The USD stage where the shader is defined.
-        path (str): The path to the shader node.
-        connector (shaderConnector): Contains the shader connection details.
-        input (UsdShade.Output): The input to connect to.
-
-    Returns:
-        UsdShade.Output: The resulting shader output after applying the blend.
-    """
-    name = connector.name
-    blend:str = connector.blend
-    opacity:float = connector.opacity
-    
-    output:UsdShade.Output = connector.output
-    # outType = output.GetTypeName()
-    outType = connector.outType
-    path = connector.path
-    
-    texturePath = str(path) #+ "/" + name
-    
-    if verbose and verbose_modify_tree: print(f"✅ CONNECT {name}: {input} x {opacity} -> {blend} -> OUT")
-    
-    #----------------------------------------------------- If blend effect not supported
-    if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
-        if verbose and verbose_unsupported: print(f"❎ Unsupported: {blend} blend effect is not yet supported")
-        diag("Unsupported", "Blend_Mode", f"[{blend}] in {texturePath} is not yet supported (ignored)")
-        return output
-    
-    if blend in [lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY, lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE]:
-        #----------------------------------------------------- Set effect blend operator
-        operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
-        usdOperatorName = usdInputMap["blend"][blend] + UTIL_get_node_type_prefix(outType)
-        operator.CreateIdAttr(usdOperatorName)
-        operator.CreateInput('in1', output.GetTypeName()).ConnectToSource(output)
-        
-        #----------------------------------------------------- Set or connect input depending on its type
-        if type(input) is UsdShade.Output:
-            operator.CreateInput('in2', output.GetTypeName()).ConnectToSource(input)
-        else:
-            operator.CreateInput('in2', output.GetTypeName()).Set(eval(input))
-        
-        output = operator.CreateOutput('out', outType)
-        
-        #----------------------------------------------------- set opacity as mix
-        operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_mix")
-        usdOperatorName = "ND_mix" + UTIL_get_node_type_prefix(outType)
-        operator.CreateIdAttr(usdOperatorName)
-        operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
-        
-        #----------------------------------------------------- Set or connect input depending on its type
-        if type(input) is UsdShade.Output:
-            operator.CreateInput('bg', output.GetTypeName()).ConnectToSource(input)
-        else:
-            operator.CreateInput('bg', output.GetTypeName()).Set(eval(input))
-        
-        operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
-        
-        #----------------------------------------------------- Expose output
-        output = operator.CreateOutput('out', outType)
-        
-    else:
-        #----------------------------------------------------- Set effect blend operator and opacity as mix
-        operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
-        usdOperatorName = usdInputMap["blend"][blend] + UTIL_get_node_type_prefix(outType)
-        operator.CreateIdAttr(usdOperatorName)
-        operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
-        
-        #----------------------------------------------------- Set or connect input depending on its type
-        if type(input) is UsdShade.Output:
-            operator.CreateInput('bg', output.GetTypeName()).ConnectToSource(input)
-        else:
-            operator.CreateInput('bg', output.GetTypeName()).Set(eval(input))
-        
-        #----------------------------------------------------- Set or connect input depending on its type
-        operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
-        
-        #----------------------------------------------------- Expose output
-        output = operator.CreateOutput('out', outType)
-    
-    return output
-
-# Connect all effect stack layers together
-def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, name:str)->UsdShade.Output:
-    
-    output:UsdShade.Output = None
-    
-    for effectName in context.effectsStack.keys():
-        # ////////////////////////////////// WEAK - Should be better too use a dedicated mapping table with default value or something
-        #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
-        usdInputName = usdInputMap['effect'][effectName]
-        modoInputName = UTIL_get_key_from_value(stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL]['principled'], usdInputName)
-        
-        if context.advancedMaterialChannels.find(modoInputName) != None:
-            materialInputValue = context.advancedMaterialChannels.find(modoInputName).get('value')
-        else:
-            materialInputValue = UTIL_float_to_out_type("0.0", usdTypeMap[usdInputName])
-        
-        output = materialInputValue
-        # ////////////////////////////////// WEAK
-        
-        #----------------------------------------------------- Create connections
-        # print(f"Unstacking : {effectName} has {len(context.effectsStack[effectName])} layers")
-        for connectorIndex in range(0, len(context.effectsStack[effectName])):
-            connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
-            # print(f"Unstacking {effectName} layer N° {connectorIndex} : {connector.name}")
-            
-            # Create the connector nodes, connect the previous output and expose the new output
-            output = USD_connect_operator(stage, connector, output)
-    
-        #---------------------------------------------------- Connect the latest exposed output to the shader input corresponding to the current effect
-        USD_connect_texture_output_to_shader_input(stage, context, effectName, output, name)
-        
-    return output
-
 # Create a connector and stack it in context
 def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, context:ShadingContext) -> ShadingContext:
     """
@@ -743,6 +644,280 @@ def USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output, 
         
     return context
     
+# Connect an effect layer to the last created output for this stack
+def USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Output) -> UsdShade.Output:
+    """
+    Connects a shader output to a specified input using a blend operator.
+
+    This function defines a shader operator based on the blend type and connects
+    the shader output to the input. It supports various blend effects and handles
+    opacity as a mix factor. If the blend effect is unsupported, it returns the
+    original output.
+
+    Parameters:
+        stage: The USD stage where the shader is defined.
+        path (str): The path to the shader node.
+        connector (shaderConnector): Contains the shader connection details.
+        input (UsdShade.Output): The input to connect to.
+
+    Returns:
+        UsdShade.Output: The resulting shader output after applying the blend.
+    """
+    name = connector.name
+    blend:str = connector.blend
+    opacity:float = connector.opacity
+    
+    output:UsdShade.Output = connector.output
+    outType = connector.outType
+    path = connector.path
+    
+    texturePath = str(path) #+ "/" + name
+    
+    if verbose and verbose_modify_tree: print(f"✅ CONNECT {name}: {input.GetFullName()} x {opacity} -> {blend} -> OUT")
+    
+    #----------------------------------------------------- If blend effect not supported
+    if not (blend in usdInputMap["blend"].keys()) or usdInputMap["blend"][blend] == "":
+        if verbose and verbose_unsupported:
+            print(f"❎ Unsupported: {blend} blend effect is not yet supported")
+        diag("Unsupported", "Blend_Mode", f"[{blend}] in {texturePath} is not yet supported (ignored)")
+        return output
+    
+    if blend in [lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY, lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE]:
+        #----------------------------------------------------- Set effect blend operator
+        operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
+        usdOperatorName = usdInputMap["blend"][blend] + UTIL_get_node_type_prefix(outType)
+        operator.CreateIdAttr(usdOperatorName)
+        operator.CreateInput('in1', output.GetTypeName()).ConnectToSource(output)
+        
+        #----------------------------------------------------- Set or connect input depending on its type
+        if type(input) is UsdShade.Output:
+            operator.CreateInput('in2', output.GetTypeName()).ConnectToSource(input)
+        else:
+            operator.CreateInput('in2', output.GetTypeName()).Set(eval(input))
+        
+        output = operator.CreateOutput('out', outType)
+        
+        #----------------------------------------------------- set opacity as mix
+        operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_mix")
+        usdOperatorName = "ND_mix" + UTIL_get_node_type_prefix(outType)
+        operator.CreateIdAttr(usdOperatorName)
+        operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
+        
+        #----------------------------------------------------- Set or connect input depending on its type
+        if type(input) is UsdShade.Output:
+            operator.CreateInput('bg', output.GetTypeName()).ConnectToSource(input)
+        else:
+            operator.CreateInput('bg', output.GetTypeName()).Set(eval(input))
+        
+        operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
+        
+        #----------------------------------------------------- Expose output
+        output = operator.CreateOutput('out', outType)
+        
+    else:
+        #----------------------------------------------------- Set effect blend operator and opacity as mix
+        operator:UsdShade.Shader = UsdShade.Shader.Define(stage, texturePath + "_blend_" + blend)
+        usdOperatorName = usdInputMap["blend"][blend] + UTIL_get_node_type_prefix(outType)
+        
+        print(f"operatorName={usdOperatorName}")
+        
+        operator.CreateIdAttr(usdOperatorName)
+        
+        print(f"output.GetTypeName() = {output.GetTypeName()}")
+        
+        operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
+        
+        print(f"input={input.GetFullName()} of type{type(input)}")
+        #----------------------------------------------------- Set or connect input depending on its type
+        if type(input) is UsdShade.Output:
+            operator.CreateInput('bg', output.GetTypeName()).ConnectToSource(input)
+        else:
+            print(f"eval(input)={eval(input)} of type {type(eval(input))}")
+            operator.CreateInput('bg', output.GetTypeName()).Set(eval(input))
+        
+        #----------------------------------------------------- Set or connect input depending on its type
+        operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
+        
+        #----------------------------------------------------- Expose output
+        output = operator.CreateOutput('out', outType)
+    
+    return output
+
+# Connect all effect stack layers together
+def USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str, name:str)->UsdShade.Output:
+    
+    output:UsdShade.Output = None
+    print (f"Effect Stack Keys: {str(context.effectsStack.keys())}")
+    print("----------------------------------------------------------------")
+    
+    for effectName in context.effectsStack.keys():
+        # ////////////////////////////////// WEAK - Should be better too use a dedicated mapping table with default value or something
+        #----------------------------------------------------- Retrieve the modo input name from effect name using usd name as pivot mapping value
+        print("------------------------------")
+        print(f"effectName={effectName}")
+        usdInputName = usdInputMap['effect'][effectName]
+        print(f"usdInputName={usdInputName}")
+        modoInputName = UTIL_get_key_from_value(stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL]['principled'], usdInputName)
+        print(f"modoInputName={modoInputName}")
+        
+        if context.advancedMaterialChannels.find(modoInputName) != None:
+            materialInputValue = context.advancedMaterialChannels.find(modoInputName).get('value')
+            #print(f"materialInputValue={materialInputValue} of type:{type(materialInputValue)}")
+            
+            cleaned_value = materialInputValue.strip()
+            if cleaned_value.startswith(("(", "[")) and cleaned_value.endswith((")", "]")):
+                cleaned_value = cleaned_value[1:-1]
+            output = cast(UsdShade.Output, tuple(float(value.strip()) for value in cleaned_value.split(",") if value.strip()))
+            #print (f"output = {output} of type: {type(output)}")
+            output = UsdShade.Output(stage.GetPrimAtPath(path).GetAttribute(usdInputName))
+        
+        #----------------------------------------------------- Create connections
+        print(f"Unstacking : {effectName} has {len(context.effectsStack[effectName])} layers")
+        for connectorIndex in range(0, len(context.effectsStack[effectName])):
+            print("----------------")
+            connector:shaderConnector = context.effectsStack[effectName][connectorIndex]
+            print(f"Unstacking {effectName} layer N° {connectorIndex} : {connector.name}")
+            
+            # Create the connector nodes, connect the previous output and expose the new output
+            output = USD_connect_operator(stage, connector, output)
+            print("---------------")
+    
+        print("------------------------------")
+        #---------------------------------------------------- Connect the latest exposed output to the shader input corresponding to the current effect
+        USD_connect_texture_output_to_shader_input(stage, context, effectName, output, name)
+    
+    print("----------------------------------------------------------------") 
+    return output
+    
+# Connect a texture to the relevant shader
+def USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, name:str) -> UsdShade.Input:
+    """
+    Connects a texture output to a shader input based on the specified effect name.
+
+    This function handles different effects such as "stencil", "bump", "normal", 
+    and "displace" by creating and connecting appropriate shaders and inputs 
+    within a USD stage. It utilizes the context and XML data to determine 
+    the connections and shader configurations.
+
+    Parameters:
+        stage (Usd.Stage): The USD stage where the shader and connections are defined.
+        context (ShadingContext): The shading context containing material and shader information.
+        effectName (str): The name of the effect to be applied.
+        output (UsdShade.Output): The output to be connected to the shader input.
+        xml (ET.Element): XML element containing additional configuration data.
+
+    Returns:
+        UsdShade.Input: The connected shader input, or None if the effect is not found.
+    """
+    material:UsdShade.Material = context.material
+    shader:UsdShade.Shader = context.shader
+    advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
+    previewShader:UsdShade.Shader = context.previewShader
+    path:Path = material.GetPath().AppendPath(name)
+    
+    if effectName in usdInputMap['effect'].keys():
+        inputName = usdInputMap['effect'][effectName]
+        
+        print(f"material path: {output.GetPrim().GetPath()}")
+        print(f"effectname: {effectName} --> inputName: {inputName}")
+        
+        if effectName == "stencil":
+            #---------------------------------------------------- Create texture definition even if modo layer is disabled
+            #textureOutput:UsdShade.Shader = USD_create_3d_texture(stage, context, xml, Sdf.ValueTypeNames.Color3f)
+            textureOutput:UsdShade.Shader = output
+            outputType = Sdf.ValueTypeNames.Float
+            
+            #---------------------------------------------------- Trick : Create invert color and connect to texture
+            path:Path = material.GetPath().AppendPath(name + "_invert_color")
+            invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            invertShader.CreateIdAttr('ND_invert' + str(outputType))
+            invertShader.CreateInput("in", outputType).ConnectToSource(textureOutput)
+            invertShader.CreateOutput('out', outputType)
+            
+            #---------------------------------------------------- Trick : Create math round to set colors to 0 or 1 for modo stencil like
+            path:Path = material.GetPath().AppendPath(name + "_set_0_or_1")
+            roundShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            roundShader.CreateIdAttr("ND_round_float")
+            roundShader.CreateInput("in", outputType).ConnectToSource(invertShader.GetOutput('out'))
+            roundShader.CreateOutput('out', outputType)
+            
+            #---------------------------------------------------- Connect round map to shader input
+            shader.CreateInput("opacity", outputType).ConnectToSource(roundShader.GetOutput('out'))
+            
+        elif effectName == "bump":
+            #---------------------------------------------------- Create texture definition even if modo layer is disabled
+            #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Vector3f)
+            textureOutput = output
+            
+            #---------------------------------------------------- Retrieve displace value in parent/channels node
+            bumpHeight = float(advancedMaterialChannels.find("bumpAmp").get("value"))
+            
+            #---------------------------------------------------- Create Normal map and connect to tecture out
+            path:Path = material.GetPath().AppendPath(name + "_bumpMap")
+            normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            normalShader.CreateIdAttr("ND_bump_vector3")
+            normalShader.CreateInput("height", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
+            normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(bumpHeight)
+            normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+            
+            #---------------------------------------------------- Connect normalMap to shader input
+            shader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput.GetOutput('out'))
+            
+            #---------------------------------------------------- Connect texture to previewShader input
+            if (exportGlPreviewMaterial):
+                previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
+        
+        elif effectName == "normal":
+            #---------------------------------------------------- Create texture definition even if modo layer is disabled
+            textureOutput:UsdShade.Shader = output
+            outputType = Sdf.ValueTypeNames.Color3f
+            
+            #---------------------------------------------------- Retrieve displace value in parent/channels node
+            normalHeight = 1.0 #--------------------------------- unfortunately, this value is not given by modo :: Probaly Bump height is used for normal map too, but not sure, so we set it to 1.0 for now
+            
+            #---------------------------------------------------- Create Normal map and connect to tecture out
+            path:Path = material.GetPath().AppendPath(name + "_normalmap")
+            print(f"Creating normal map shader for {name} @{path} with normalHeight={normalHeight}")
+            normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            normalShader.CreateIdAttr("ND_normalmap")
+            normalShader.CreateInput("in", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
+            normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(normalHeight)
+            normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
+            
+            #---------------------------------------------------- Connect normalMap to shader input
+            shader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
+            
+            #---------------------------------------------------- Connect texture to previewShader input
+            if (exportGlPreviewMaterial):
+                previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
+        
+        elif effectName == "displace":
+            #---------------------------------------------------- Retrieve displace value in parent/channels node
+            displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
+            
+            #---------------------------------------------------- Create Normal map and connect to tecture out
+            path:Path = material.GetPath().AppendPath(name + "_displacement")
+            displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            displacementShader.CreateIdAttr("ND_displacement_float")
+            displacementShader.CreateInput("displacement", Sdf.ValueTypeNames.Float).ConnectToSource(output)
+            displacementShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(displacementHeight)
+            output = displacementShader.CreateOutput('out', Sdf.ValueTypeNames.Float)
+            
+            #---------------------------------------------------- Connect normalMap to shader input
+            material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
+        
+    
+        input = shader.GetInput(inputName)
+        if input.Get() != None:
+            return input.ConnectToSource(output)
+        else:
+            return USD_create_shader_input(shader, inputName, output, usdTypeMap[inputName])
+    
+    if(verbose and verbose_unsupported):print(f"❎ Unsupported: {effectName} effect is not yet supported")
+    diag("Unsupported", "Effect", f"[{effectName}] is not yet supported (ignored)")
+        
+    return None
+
 # Create USD shader for advanced material layer
 def USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.Material, xml:ET.Element, isPreview:bool) -> UsdShade.Shader: 
     """
@@ -990,7 +1165,7 @@ def USD_create_3d_texture(stage:Usd.Stage, path:Path, xml:ET.Element, texLocator
     noiseShader.CreateInput("outmax", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/value2').get('value')))
     noiseShader.CreateInput("clampoutput", Sdf.ValueTypeNames.Int).Set(0)
     
-    #---------------------------------------------------- Fractal
+    # ---------------------------------------------------- Fractal
     noiseShader.CreateInput("octaves", Sdf.ValueTypeNames.Int).Set(int(xml.find('channels/freqs').get('value')))
     noiseShader.CreateOutput("lacunarity", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/freqRatio').get('value')))
     noiseShader.CreateOutput("diminish", Sdf.ValueTypeNames.Float).Set(float(xml.find('channels/ampRatio').get('value')))
@@ -1021,15 +1196,28 @@ def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.El
     material:UsdShade.Material = context.material
     
     #---------------------------------------------------- Store the texture path for further consolidation
-    textureFilePath = xml.find('videoStill/channels/filename').get('value')
+    textureItem = xml.find('videoStill/channels/filename')
+    if textureItem != None:
+        textureFilePath = textureItem.get('value')
+    else:
+        textureFilePath = ""
+        if(verbose and verbose_unsupported): print(f"❎ Undefined image in {material.GetPath()} ")
+        diag("Undefined", "Image", f"Missing textire in [{material.GetPath()}]")
     
-    if consolidateScene :
+    if consolidateScene and textureFilePath!="":
         consolidatePath = UTIL_get_consolidated_path()
         file_name = os.path.basename(textureFilePath)
         consolidatedTextureFilePath = os.path.join(consolidatePath, file_name)
         
         if (textureFilePath not in textureList):
             textureList[textureFilePath] = consolidatedTextureFilePath
+    
+    #------------------------------------------------------ Change outType depending on texture format
+    # tex_format = xml.find('videoStill/channels/format').get('value')
+    # if tex_format in ["PNG", "TGA", "EXR"]:
+    #     outType = Sdf.ValueTypeNames.Color4f
+    # else:
+    #     outType = Sdf.ValueTypeNames.Color3f
             
     #---------------------------------------------------- Create the texture locator
     materialPath = material.GetPath()
@@ -1046,7 +1234,7 @@ def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.El
         #---------------------------------------------------- Create the UV texture transform node
         textureTransformOutput = USD_create_UV_texture_transform(stage, materialPath, xml)
         #---------------------------------------------------- Create the UV texture node
-        textureOutput = USD_create_UV_texure(stage, materialPath, xml, outType, textureTransformOutput)
+        textureOutput = USD_create_UV_texture(stage, materialPath, xml, outType, textureTransformOutput)
         
     elif projType == "triplanar":
         #---------------------------------------------------- Create the UV texture transform node
@@ -1060,7 +1248,7 @@ def USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.El
         #---------------------------------------------------- Create the UV texture transform node
         textureTransformOutput = USD_create_UV_texture_transform(stage, materialPath, xml)
         #---------------------------------------------------- Create the UV texture node
-        textureOutput = USD_create_UV_texure(stage, materialPath, xml, outType, textureTransformOutput)
+        textureOutput = USD_create_UV_texture(stage, materialPath, xml, outType, textureTransformOutput)
     
     #---------------------------------------------------- Create the texture adjust nodegraph
     textureAdjustNodeGraphOutput = USD_create_texture_adjust_nodegraph(stage, materialPath, xml, outType, textureOutput)
@@ -1096,13 +1284,17 @@ def USD_create_triplanar_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Elem
     
     return textureOutput
 
-def USD_create_UV_texure(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
+def USD_create_UV_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
     texturePath:Path = materialPath.AppendPath(UTIL_clean_name(xml.get('name')))
-    textureFilePath = xml.find('videoStill/channels/filename').get('value')
+    textureItem = xml.find('videoStill/channels/filename')
+    
+    textureFilePath = ""
+    if textureItem != None: textureFilePath = textureItem.get('value')
     
     #------------------------------------------------------ Override texture filepath with $HIP consolidated path
     if consolidateScene: textureFilePath = UTIL_get_consolidated_relative_path(textureList[textureFilePath])
     
+    #---------------------------------------------------- Create the UV texture node
     texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
     texture.CreateIdAttr('ND_image' + UTIL_get_node_type_prefix(outType))
     texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
@@ -1129,10 +1321,10 @@ def USD_create_texture_adjust_nodegraph(stage:Usd.Stage, materialPath:Path, xml:
     textureAdjustNodeGraph = UsdShade.NodeGraph.Define(stage, textureAdjustNodeGraphPath)
     textureAdjustNodeGraph.CreateInput('texture', outType).ConnectToSource(textureInput)
     textureAdjustNodeGraph.CreateInput('invert', Sdf.ValueTypeNames.Int).Set(invert)
-    textureAdjustNodeGraph.CreateInput('outLow', outType).Set(UTIL_float_to_out_type(srcLow, outType))
-    textureAdjustNodeGraph.CreateInput('outHigh', outType).Set(UTIL_float_to_out_type(srcHigh, outType))
-    textureAdjustNodeGraph.CreateInput('brightness', outType).Set(UTIL_float_to_out_type(brightness, outType))
-    textureAdjustNodeGraph.CreateInput('contrast', outType).Set(UTIL_float_to_out_type(contrast, outType))
+    textureAdjustNodeGraph.CreateInput('outLow', outType).Set(eval(UTIL_float_to_out_type(srcLow, outType)))
+    textureAdjustNodeGraph.CreateInput('outHigh', outType).Set(eval(UTIL_float_to_out_type(srcHigh, outType)))
+    textureAdjustNodeGraph.CreateInput('brightness', outType).Set(eval(UTIL_float_to_out_type(brightness, outType)))
+    textureAdjustNodeGraph.CreateInput('contrast', outType).Set(eval(UTIL_float_to_out_type(contrast, outType)))
     
     #---------------------------------------------------- Create image adjustments
     textureRange = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/valueRange")
@@ -1159,10 +1351,20 @@ def USD_create_texture_adjust_nodegraph(stage:Usd.Stage, materialPath:Path, xml:
     # --------------------------------------------------- Alpha mode
     alphaMode = xml.find('channels/alpha').get('value')
     if alphaMode == "only":
+        #------------------------------------------------ Change output type to float
+        outType = Sdf.ValueTypeNames.Float
         extractChannelShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(textureAdjustNodeGraphPath) + "/channel")
         extractChannelShader.CreateIdAttr("ND_separate4_color4")
         extractChannelShader.CreateInput("in", Sdf.ValueTypeNames.Color4f).ConnectToSource(adjustedTextureOutput)
-        adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outa', Sdf.ValueTypeNames.Float)
+        adjustedTextureOutput:UsdShade.Output = extractChannelShader.CreateOutput('outa', outType)
+        
+    elif alphaMode == "ignore":
+        #------------------------------------------------ Change output type to color3f
+        outType = Sdf.ValueTypeNames.Color3f
+        
+    else:
+        #------------------------------------------------ Change output type to color3f
+        outType = Sdf.ValueTypeNames.Color3f
             
     # --------------------------------------------------- Invert
     if invert == 1:
@@ -1293,130 +1495,6 @@ def USD_create_3D_texture_transform(stage:Usd.Stage, path:Path, xml:ET.Element) 
     textureTransformOutput.ConnectToSource(output)
     
     return textureTransformOutput
-    
-# Connect a texture to the relevant shader
-def USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, name:str) -> UsdShade.Input:
-    """
-    Connects a texture output to a shader input based on the specified effect name.
-
-    This function handles different effects such as "stencil", "bump", "normal", 
-    and "displace" by creating and connecting appropriate shaders and inputs 
-    within a USD stage. It utilizes the context and XML data to determine 
-    the connections and shader configurations.
-
-    Parameters:
-        stage (Usd.Stage): The USD stage where the shader and connections are defined.
-        context (ShadingContext): The shading context containing material and shader information.
-        effectName (str): The name of the effect to be applied.
-        output (UsdShade.Output): The output to be connected to the shader input.
-        xml (ET.Element): XML element containing additional configuration data.
-
-    Returns:
-        UsdShade.Input: The connected shader input, or None if the effect is not found.
-    """
-    material:UsdShade.Material = context.material
-    shader:UsdShade.Shader = context.shader
-    advancedMaterialChannels:ET.Element = context.advancedMaterialChannels
-    previewShader:UsdShade.Shader = context.previewShader
-    path:Path = material.GetPath().AppendPath(name)
-    
-    if effectName in usdInputMap['effect'].keys():
-        inputName = usdInputMap['effect'][effectName]
-        
-        if effectName == "stencil":
-            #---------------------------------------------------- Create texture definition even if modo layer is disabled
-            #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Color3f)
-            textureOutput = output
-            #---------------------------------------------------- Trick : Create invert color and connect to texture
-            path:Path = material.GetPath().AppendPath(name + "_invert_color")
-            mathShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            mathShader.CreateIdAttr("ND_subtract_float")
-            mathShader.CreateInput("in1", Sdf.ValueTypeNames.Color3f).Set((1.0, 1.0, 1.0))
-            mathShader.CreateInput("in2", Sdf.ValueTypeNames.Color3f).ConnectToSource(textureOutput)
-            mathShader.CreateOutput('out', Sdf.ValueTypeNames.Color3f)
-            
-            #---------------------------------------------------- Trick : Create math round to set colors to 0 or 1 for modo stencil like
-            path:Path = material.GetPath().AppendPath(name + "_set_0_or_1")
-            roundShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            roundShader.CreateIdAttr("ND_round_float")
-            roundShader.CreateInput("in", Sdf.ValueTypeNames.Color3f).ConnectToSource(mathShader.GetOutput('out'))
-            roundShader.CreateOutput('out', Sdf.ValueTypeNames.Color3f)
-            
-            #---------------------------------------------------- Connect round map to shader input
-            shader.CreateInput("opacity", Sdf.ValueTypeNames.Vector3f).ConnectToSource(roundShader.GetOutput('out'))
-            
-        elif effectName == "bump":
-            #---------------------------------------------------- Create texture definition even if modo layer is disabled
-            #textureOutput:UsdShade.Shader = createUsdTextureOutput(stage, context, xml, Sdf.ValueTypeNames.Vector3f)
-            textureOutput = output
-            
-            #---------------------------------------------------- Retrieve displace value in parent/channels node
-            bumpHeight = float(advancedMaterialChannels.find("bumpAmp").get("value"))
-            
-            #---------------------------------------------------- Create Normal map and connect to tecture out
-            path:Path = material.GetPath().AppendPath(name + "_bumpMap")
-            normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            normalShader.CreateIdAttr("ND_bump_vector3")
-            normalShader.CreateInput("height", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
-            normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(bumpHeight)
-            normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-            
-            #---------------------------------------------------- Connect normalMap to shader input
-            shader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-            
-            #---------------------------------------------------- Connect texture to previewShader input
-            if (exportGlPreviewMaterial):
-                previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-        
-        elif effectName == "normal":
-            #---------------------------------------------------- Create texture definition even if modo layer is disabled
-            textureOutput = output
-            
-            #---------------------------------------------------- Retrieve displace value in parent/channels node
-            normalHeight = 0.0 #--------------------------------- unfortunately, this value is not given by modo
-            
-            #---------------------------------------------------- Create Normal map and connect to tecture out
-            path:Path = material.GetPath().AppendPath(name + "_normalmap")
-            normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            normalShader.CreateIdAttr("ND_normalmap")
-            normalShader.CreateInput("in", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput)
-            normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(normalHeight)
-            normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-            
-            #---------------------------------------------------- Connect normalMap to shader input
-            shader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-            
-            #---------------------------------------------------- Connect texture to previewShader input
-            if (exportGlPreviewMaterial):
-                previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-        
-        elif effectName == "displace":
-            #---------------------------------------------------- Retrieve displace value in parent/channels node
-            displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
-            
-            #---------------------------------------------------- Create Normal map and connect to tecture out
-            path:Path = material.GetPath().AppendPath(name + "_displacement")
-            displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            displacementShader.CreateIdAttr("ND_displacement_float")
-            displacementShader.CreateInput("displacement", Sdf.ValueTypeNames.Float).ConnectToSource(output)
-            displacementShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(displacementHeight)
-            output = displacementShader.CreateOutput('out', Sdf.ValueTypeNames.Float)
-            
-            #---------------------------------------------------- Connect normalMap to shader input
-            material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
-        
-    
-        input = shader.GetInput(inputName)
-        if input.Get() != None:
-            return input.ConnectToSource(output)
-        else:
-            return USD_create_shader_input(shader, inputName, output, usdTypeMap[inputName])
-    
-    if(verbose and verbose_unsupported): print(f"❎ Unsupported: {effectName} effect is not yet supported")
-    diag("Unsupported", "Effect", f"[{effectName}] is not yet supported (ignored)")
-    return None
-
-
 
 #////////////////////////////////////// UTIL
 
@@ -1475,7 +1553,7 @@ def UTIL_format_channel(channel:modo.Channel, ctype:int, evalType:str, storageTy
     
     return chan
 
-def UTIL_get_key_from_value(dict, value):
+def UTIL_get_key_from_value(dict, value)->str:
     """
     Retrieve the key associated with a given value in usdInputMap['effects'].
 
@@ -1488,7 +1566,7 @@ def UTIL_get_key_from_value(dict, value):
     for key, val in dict.items():
         if val == value:
             return key
-    return None
+    return "None"
 
 # Format any channel value to given type
 def UTIL_format_channel_value(channel:modo.Channel): 
@@ -1592,7 +1670,7 @@ def UTIL_get_mapped_channel(chName:str, itemType:str=None, brdfType:str = None)-
     diag("Unsupported", "Channel", f"[{chName}] is not yet supported (ignored)")
     return None
 
-def UTIL_float_to_out_type(value:float, outType:Sdf.ValueTypeNames):
+def UTIL_float_to_out_type(value:float, outType:Sdf.ValueTypeNames)->str:
     """
     Convert a float value to a specified Sdf.ValueTypeNames type.
 
@@ -1607,13 +1685,13 @@ def UTIL_float_to_out_type(value:float, outType:Sdf.ValueTypeNames):
         - Returns a tuple of three identical float values with an additional 1.0 if the target type is Color4f.
     """
     if outType in [Sdf.ValueTypeNames.Float, Sdf.ValueTypeNames.Double]:
-        return value
+        return f"{value}"
             
     elif outType in [Sdf.ValueTypeNames.Color3f, Sdf.ValueTypeNames.Vector3f]:
-        return (value, value, value)
+        return f"({value}, {value}, {value})"
             
     elif outType == Sdf.ValueTypeNames.Color4f:
-        return (value, value, value, 1.0)
+        return f"({value}, {value}, {value}, 1.0)"
 
 def UTIL_get_node_type_prefix(outType:str):
     """
@@ -1708,6 +1786,14 @@ def UTIL_copy_and_clean_files():
 
 # Clean the shadertree layers names (remove white space and parenthesis)
 def UTIL_clean_name(name:str) -> str:
+    """_summary_
+
+    Args:
+        name (str): _description_
+
+    Returns:
+        str: _description_
+    """    
     originalName = name
     if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
     name = UTIL_replace_chars(name, ["(", ")"], "")
