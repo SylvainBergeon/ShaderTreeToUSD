@@ -14,7 +14,6 @@ import modo.dialogs
 import modo.item
 import modo.util
 
-from .ShaderFilters import usdInputMap
 from .ShaderFilters import usdTypeMap
 from .ShaderFilters import channelTypeMap
 from .ShaderFilters import stdMatChannelMap
@@ -1144,8 +1143,8 @@ def _USD_create_UV_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Element, o
     texture.CreateIdAttr('ND_image' + _UTIL_get_node_type_prefix(outType))
     texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
     texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
-    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileU').get('value')])
-    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(usdInputMap['uvTile'][xml.find('txtrLocator/channels/tileV').get('value')])
+    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(xml.find('txtrLocator/channels/tileU').get('usdWrapMode'))
+    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(xml.find('txtrLocator/channels/tileV').get('usdWrapMode'))
     textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
     
     return textureOutput
@@ -1395,7 +1394,7 @@ def _UTIL_format_channel(channel:modo.Channel, ctype:int, evalType:str, storageT
 
 def _UTIL_get_key_from_value(dict, value)->str:
     """
-    Retrieve the key associated with a given value in usdInputMap['effects'].
+    Retrieve the key associated with a given value in a dict (first match found).
 
     Parameters:
         value: The value for which the corresponding key is sought.

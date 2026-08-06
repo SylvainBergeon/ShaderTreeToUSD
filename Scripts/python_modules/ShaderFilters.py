@@ -125,33 +125,16 @@ channelTypeMap = {
     lx.symbol.iCHANTYPE_STORAGE:    "string",
     lx.symbol.iCHANTYPE_NONE:       "none"
 }
+# "blend" and "effect" used to live here, keyed by the same values normalize_blend_operators.py /
+# normalize_effect_channel_names.py now resolve up front (see Scripts/python_modules/normalize/) - USD
+# construction no longer reads them from this module. Removed rather than left stale, to avoid the trap
+# of editing a table here that no longer affects anything; normalize/*.py is the live source now.
 usdInputMap = {
     "uvTile":{
         "reset":"black",
         "repeat":"periodic",
         "edge":"clamp",
         "mirror":"mirror"
-    },
-    "effect":{
-        "diffColor":"base_color",
-        "diffAmount":"base",
-        "rough":"specular_roughness",
-        "normal":"normal",
-        "objectNormal":"in",
-        "bump":"normal",
-        "stencil":"opacity",
-        "specAmount":"specular",
-        "reflFresnel":"specular",
-        "specFresnel":"specular",
-        "tranAmount":"transmission",
-        "lumiAmount":"emission",
-        "lumiColor":"emission_color",
-        "specColor":"specular_color",
-        "metallic":"metalness",
-        "sheen":"sheen",
-        "sheenTint":"sheen_color",
-        "flatness":"sheen_roughness",
-        "displace":"displacement"
     },
     "effect_gl":{
         "diffColor":"diffuseColor",
@@ -162,24 +145,6 @@ usdInputMap = {
         "rough":"roughness",
         "normal":"normal",
         "displace":"displacement"
-    },
-    "blend":{
-        #--------------------------------------------------- Maths
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_MULTIPLY:"ND_multiply",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIVIDE:"ND_divide",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_NORMAL:"ND_mix",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_ADD:"ND_plus",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_SUBTRACT:"ND_minus",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_SCREEN:"ND_screen",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_COLORBURN:"ND_burn",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_COLORDODGE:"ND_dodge",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_DIFFERENCE:"ND_difference",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_OVERLAY:"ND_overlay",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_DARKEN:"",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_HARDLIGHT:"",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_LIGHTEN:"",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_NORMALMULT:"",
-        lx.symbol.sICVAL_TEXTURELAYER_BLEND_SOFTLIGHT:""
     }
 }
 usdTypeMap = {
