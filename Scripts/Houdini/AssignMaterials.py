@@ -1,5 +1,3 @@
-# python
-
 # Use the drop down menu to select example code snippets.
 node = hou.pwd()
 
@@ -34,23 +32,37 @@ def traverse_prim(prim):
     for child in prim.GetChildren():
         traverse_prim(child)
 
-    
+# Fill-up matlist from shadertree
 traverse_branch(stage, "/shadertree")
 
-#print("=======================================")
-for name in matList:
-    p = matList[name]
-    #print(name + " = " + p)
-#print("=======================================")
+path_string = node.evalParm('path_string')
 
-for prim in stage.Traverse():
-    if prim.GetTypeName() == 'GeomSubset':
-        subsetName = prim.GetName()
-        matname = subsetName.replace("material_", "")
-        prim.CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('materialBind')
-        # Lier le matériau à ce GeomSubset
-        if matname in matList.keys():
-            print(subsetName + " = " + matname + "->" + matList[matname])
-            materialBinding = prim.GetRelationship('material:binding')
-            #materialBinding = prim.CreateRelationship('material:binding', True)
-            materialBinding.SetTargets([Sdf.Path(matList[matname])])
+if path_string and stage.GetPrimAtPath(path_string).IsValid():
+    start_prim = stage.GetPrimAtPath(path_string)
+
+    for prim in Usd.PrimRange(start_prim):
+        if prim.GetTypeName() == 'GeomSubset':
+            subsetName = prim.GetName()
+            matname = subsetName.replace("material_", "")
+            prim.CreateAttribute('familyName', Sdf.ValueTypeNames.String).Set('materialBind')
+            # Lier le matériau à ce GeomSubset
+            if matname in matList.keys():
+                # --- MODIFICATION ICI ---
+                # 1. Appliquer l'API Schema (génère le prepend apiSchemas)
+                binding_api = UsdShade.MaterialBindingAPI.Apply(prim)
+                
+                # 2. Créer et configurer la relation via l'API officielle UsdShade
+                material_path = Sdf.Path(matList[matname])
+                material_prim = stage.GetPrimAtPath(material_path)
+                
+                if material_prim:
+                    material_obj = UsdShade.Material(material_prim)
+                    binding_api.Bind(material_obj)
+                # ------------------------
+                #print(subsetName + " = " + matname + "->" + matList[matname])
+                #materialBinding = prim.GetRelationship('material:binding')
+                #materialBinding = prim.CreateRelationship('material:binding', True)
+                #materialBinding.SetTargets([Sdf.Path(matList[matname])])    
+else:
+    # Message d'avertissement optionnel si le chemin est incorrect
+    hou.ui.setStatusMessage(f"Le chemin USD '{path_string}' n'est pas valide.", hou.severityType.Warning)
