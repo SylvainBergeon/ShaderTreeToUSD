@@ -9,6 +9,12 @@ import math
 # Modo `value`: the gtr/principled-overridden value where one applies, a straight copy of `value`
 # otherwise. Both the mtlx shader and the glPreview shader (UsdPreviewSurface) read `usdValue` -
 # construction code never needs to know which channels are override-eligible.
+#
+# specCol and luminousCol additionally get a `usdPreviewValue`: UsdPreviewSurface has no standalone
+# specular/emissive intensity input, only specularColor/emissiveColor, so the glPreview shader needs
+# those colors pre-weighted by specAmt/luminousAmt instead - a value the mtlx shader does NOT want
+# (it has its own specular/emission intensity inputs). Construction reads usdPreviewValue for the
+# glPreview shader when present, falling back to usdValue everywhere else.
 
 # IOR approximation from specular amount; saturation<1 keeps the sqrt argument <1 (avoids div-by-zero at specAmt==1)
 def _ior_from_spec_amt(specAmt, saturation=.99999):
@@ -29,6 +35,13 @@ def _tinted_spec_color(diffCol, specTint):
     sb = 1 + (db / m) * specTint
     m = max(sr, sg, sb) - 1
     return (sr - m, sg - m, sb - m)
+
+# UsdPreviewSurface has no standalone specular/emissive intensity input (only specularColor/
+# emissiveColor) - scale the color by the Modo intensity channel instead, so specAmt/luminousAmt still
+# have a visible effect in the preview.
+def _weighted_color(col, amount):
+    r, g, b = col
+    return (r * amount, g * amount, b * amount)
 
 
 def normalize_specular_ior(xml):
@@ -52,9 +65,34 @@ def _normalize_material(material):
 
     brdfTypeEl = channels.find('brdfType')
     updates = _compute_overrides(brdfTypeEl.get('value'), channels) if brdfTypeEl is not None else {}
+    previewUpdates = _compute_preview_overrides(channels)
 
     for channel in channels:
         channel.set('usdValue', str(updates.get(channel.tag, channel.get('value'))))
+        if channel.tag in previewUpdates:
+            channel.set('usdPreviewValue', str(previewUpdates[channel.tag]))
+
+
+# glPreview-only: specularColor/emissiveColor weighted by their Modo intensity channel. Independent of
+# brdfType - the glPreview shader is built for every advancedMaterial regardless of gtr/principled, and
+# specCol/specAmt/luminousCol/luminousAmt exist on all of them. Construction falls back to usdValue for
+# any channel with no usdPreviewValue (i.e. everywhere the mtlx and glPreview values are the same).
+def _compute_preview_overrides(channels):
+    def raw(name):
+        el = channels.find(name)
+        return el.get('value') if el is not None else None
+
+    specCol = raw('specCol')
+    specAmt = raw('specAmt')
+    luminousCol = raw('luminousCol')
+    luminousAmt = raw('luminousAmt')
+
+    previewUpdates = {}
+    if specCol is not None and specAmt is not None:
+        previewUpdates['specCol'] = _weighted_color(eval(specCol), float(specAmt))
+    if luminousCol is not None and luminousAmt is not None:
+        previewUpdates['luminousCol'] = _weighted_color(eval(luminousCol), float(luminousAmt))
+    return previewUpdates
 
 
 def _compute_overrides(brdfType, channels):

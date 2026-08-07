@@ -22,6 +22,10 @@ def usd_value(material, name):
     return material.find(f'channels/{name}').get('usdValue')
 
 
+def preview_value(material, name):
+    return material.find(f'channels/{name}').get('usdPreviewValue')
+
+
 def ior_from_spec_amt(specAmt, saturation=.99999):
     return 2 / (1 - math.sqrt(specAmt * saturation)) - 1
 
@@ -134,6 +138,47 @@ class TestPrincipled:
         result = normalize_specular_ior(material)
 
         assert usd_value(result, 'diffAmt') == "0.9"
+
+
+class TestGlPreviewColorWeighting:
+    def test_spec_col_is_weighted_by_spec_amt_for_preview_only(self):
+        material = make_material(brdfType="gtr", useRefIdx="1", specRefIdx="0",
+                                  specAmt="0.5", refIndex="1.5", specCol="(0.8, 0.4, 0.2)")
+
+        result = normalize_specular_ior(material)
+
+        assert eval(preview_value(result, 'specCol')) == pytest.approx((0.4, 0.2, 0.1))
+        # mtlx usdValue for specCol is untouched by this (no override rule for specCol under gtr)
+        assert usd_value(result, 'specCol') == "(0.8, 0.4, 0.2)"
+
+    def test_luminous_col_is_weighted_by_luminous_amt_for_preview_only(self):
+        material = make_material(brdfType="gtr", useRefIdx="1", specRefIdx="0",
+                                  specAmt="0.5", refIndex="1.5",
+                                  luminousCol="(1.0, 1.0, 1.0)", luminousAmt="0.25")
+
+        result = normalize_specular_ior(material)
+
+        assert eval(preview_value(result, 'luminousCol')) == pytest.approx((0.25, 0.25, 0.25))
+
+    def test_weighting_is_independent_of_brdf_type(self):
+        # specCol/specAmt exist on every advancedMaterial regardless of brdfType, and the glPreview
+        # shader is always built (isPreview doesn't depend on the material's own brdfType)
+        material = make_material(brdfType="principled", useRefIdx="0", specRefIdx="0",
+                                  specAmt="0.5", refIndex="1.5", diffCol="(0.5,0.5,0.5)", specTint="0",
+                                  specCol="(1.0, 1.0, 1.0)")
+
+        result = normalize_specular_ior(material)
+
+        assert eval(preview_value(result, 'specCol')) == pytest.approx((0.5, 0.5, 0.5))
+
+    def test_channels_without_a_preview_override_have_no_usd_preview_value(self):
+        material = make_material(brdfType="gtr", useRefIdx="1", specRefIdx="0",
+                                  specAmt="0.5", refIndex="1.5", diffAmt="0.9")
+
+        result = normalize_specular_ior(material)
+
+        assert preview_value(result, 'diffAmt') is None
+        assert preview_value(result, 'refIndex') is None
 
 
 class TestStructural:

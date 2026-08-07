@@ -196,19 +196,21 @@ usdTypeMap = {
     "clearcoatRoughness":Sdf.ValueTypeNames.Float,
     "ior":Sdf.ValueTypeNames.Float,
     "occlusion":Sdf.ValueTypeNames.Float,
+    "opacityThreshold":Sdf.ValueTypeNames.Float,
 }
 
 stdMatChannelMap = {}
 stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL] = {
     "glPreview": { #----------------------------------- Mapping used for Principled shading mode
         #"useRefIdx":   "useSpecularWorkflow", # boolean toggle refIndex/specAmount ?
+        # specAmt/luminousAmt have no direct UsdPreviewSurface input (no standalone specular/emissive
+        # intensity, only specularColor/emissiveColor) - normalize_specular_ior folds them into
+        # specCol/luminousCol's usdPreviewValue instead (specularColor = specCol * specAmt, etc.).
         "specCol":      "specularColor",
         "specTint":     "metallic",
-        
+
         "diffCol":      "diffuseColor",
-        "luminousAmt":  "emissive",
         "luminousCol":  "emissiveColor",
-        "specAmt":      "specular", # (if useRefIdx = 0: specAmt)
         "rough":        "roughness",
         "refIndex":     "ior", # (if useRefIdx = 1 & specRefIdx = 1):refIndex or (if useRefIdx = 1 & specRefIdx = 0):1+specAmt
         "coatAmt":      "clearcoat",

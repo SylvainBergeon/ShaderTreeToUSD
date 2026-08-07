@@ -52,6 +52,7 @@ class ShadingContext:
     advancedMaterialChannels: ET.Element
     effectsStack:OrderedDict = OrderedDict()
     effectUsdInputNames:dict = {} # effectName (Modo) -> usdInputName, set alongside effectsStack
+    effectPreviewInputNames:dict = {} # effectName (Modo) -> usdPreviewInputName ("" if no glPreview equivalent)
 
 class shaderConnector:
     name:str
@@ -622,6 +623,7 @@ def _USD_add_shader_connector_to_context(xml:ET.Element, output:UsdShade.Output,
         if not effectName in context.effectsStack.keys():
             context.effectsStack[effectName] = []
             context.effectUsdInputNames[effectName] = effectChannel.get("usdInputName")
+            context.effectPreviewInputNames[effectName] = effectChannel.get("usdPreviewInputName")
         
         #----------------------------------------------------------- Set values for the shaderConnection
         blendChannel = xml.find("channels/blend")
@@ -867,10 +869,24 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
     
         input = shader.GetInput(inputName)
         if input.Get() != None:
-            return input.ConnectToSource(output)
+            result = input.ConnectToSource(output)
         else:
-            return _USD_create_shader_input(shader, inputName, output, usdTypeMap[inputName])
-    
+            result = _USD_create_shader_input(shader, inputName, output, usdTypeMap[inputName])
+
+        #---------------------------------------------------- Also connect to the glPreview shader, if
+        #---------------------------------------------------- this effect has a UsdPreviewSurface input
+        #---------------------------------------------------- (bump has none - see effectPreviewInputNames)
+        if exportGlPreviewMaterial:
+            previewInputName = context.effectPreviewInputNames.get(effectName)
+            if previewInputName:
+                previewInput = previewShader.GetInput(previewInputName)
+                if previewInput.Get() != None:
+                    previewInput.ConnectToSource(output)
+                else:
+                    _USD_create_shader_input(previewShader, previewInputName, output, usdTypeMap[previewInputName])
+
+        return result
+
     _DEBUG_diag("Unsupported", "Effect", f"[{effectName}] is not yet supported (ignored)")
         
     return None
@@ -892,7 +908,10 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
             carries a `usdValue` (gtr/principled-overridden where normalize_specular_ior applies, a
             straight copy of the raw Modo `value` otherwise). Both the mtlx shader and the glPreview
             shader read `usdValue`: UsdPreviewSurface models specular/IOR the same way the mtlx BRDFs
-            do, so it needs the same corrected value, not the raw Modo one.
+            do, so it needs the same corrected value, not the raw Modo one - except specCol/luminousCol,
+            which also carry a `usdPreviewValue` (specularColor/emissiveColor pre-weighted by specAmt/
+            luminousAmt) that the glPreview shader reads instead, since UsdPreviewSurface has no
+            standalone specular/emissive intensity input.
         isPreview (bool): Flag indicating if the shader is a preview shader.
 
     Returns:
@@ -905,6 +924,9 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
     if (isPreview):
         brdfType = 'glPreview'
         path = str(path) + "_preview"
+        # The canonical USD schema id/output name (not the MaterialX-wrapped ND_UsdPreviewSurface_
+        # surfaceshader node) - this is what most USD-aware tools (Hydra/Storm, usdview...) recognize
+        # for a preview surface. Verified correct and connected via UsdShade.Material.ComputeSurfaceSource().
         connectorOut = "surface"
         materialConnector = ""
         surfaceId = "UsdPreviewSurface"
@@ -926,6 +948,11 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
         
         modoInputName = channel.tag
         usdValue = channel.get('usdValue')
+        if isPreview:
+            # specCol/luminousCol are weighted by specAmt/luminousAmt for the glPreview shader only -
+            # see normalize_specular_ior. Every other channel has no usdPreviewValue, so it falls back
+            # to the same usdValue the mtlx shader also reads.
+            usdValue = channel.get('usdPreviewValue', usdValue)
 
         usdInputName = _UTIL_get_mapped_channel(modoInputName, xml.get('type'), brdfType)
         if usdInputName != None:

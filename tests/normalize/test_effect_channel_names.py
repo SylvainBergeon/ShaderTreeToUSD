@@ -46,12 +46,41 @@ def test_known_effects_resolve_to_their_usd_input_name(effect, expected_input_na
     assert effect_el(result).get('value') == effect # raw value untouched
 
 
+@pytest.mark.parametrize("effect,expected_preview_input_name", [
+    ("diffColor", "diffuseColor"),
+    ("lumiColor", "emissiveColor"),
+    ("specColor", "specularColor"),
+    ("metallic", "metallic"),
+    ("lumiAmount", "emissive"),
+    ("rough", "roughness"),
+    ("normal", "normal"),
+    ("displace", "displacement"),
+])
+def test_known_effects_resolve_to_their_glpreview_input_name(effect, expected_preview_input_name):
+    layer = make_layer(effect)
+
+    result = normalize_effect_channel_names(layer)
+
+    assert effect_el(result).get('usdPreviewInputName') == expected_preview_input_name
+
+
+def test_effects_with_no_glpreview_equivalent_are_marked_unresolved():
+    # e.g. bump, stencil, objectNormal: mtlx-only, no UsdPreviewSurface input for them
+    layer = make_layer("bump")
+
+    result = normalize_effect_channel_names(layer)
+
+    assert effect_el(result).get('usdInputName') == "normal" # has an mtlx equivalent...
+    assert effect_el(result).get('usdPreviewInputName') == "" # ...but not a glPreview one
+
+
 def test_unknown_effect_is_marked_unresolved_rather_than_raising():
     layer = make_layer("some_future_modo_effect")
 
     result = normalize_effect_channel_names(layer) # must not raise
 
     assert effect_el(result).get('usdInputName') == ""
+    assert effect_el(result).get('usdPreviewInputName') == ""
 
 
 def test_input_tree_is_never_mutated():
@@ -60,6 +89,7 @@ def test_input_tree_is_never_mutated():
     normalize_effect_channel_names(layer)
 
     assert effect_el(layer).get('usdInputName') is None
+    assert effect_el(layer).get('usdPreviewInputName') is None
 
 
 def test_effect_channels_nested_anywhere_in_the_tree_are_normalized():

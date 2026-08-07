@@ -2,12 +2,17 @@ import copy
 
 # Ported from ShaderTree.py's _USD_connect_texture_output_to_shader_input / _USD_connect_effect_stack,
 # which both look up channels/effect's value in ShaderFilters.usdInputMap['effect'] at construction time.
-# This pass resolves it once, up front, and writes the result as a usdInputName attribute, alongside the
-# untouched raw Modo effect name.
+# This pass resolves it once, up front, and writes the result as a usdInputName attribute (mtlx shader)
+# and a usdPreviewInputName attribute (glPreview/UsdPreviewSurface shader), alongside the untouched raw
+# Modo effect name.
 #
-# The table below mirrors ShaderFilters.usdInputMap['effect'] (plain string keys, no lx.symbol involved -
-# unlike usdInputMap['blend']), duplicated here so this pass has zero dependency on lx/modo/fnpxr: importing
-# ShaderFilters directly would still pull in `import lx` at module level for its other, lx-keyed tables.
+# The tables below mirror ShaderFilters.usdInputMap['effect'] and ['effect_gl'] (plain string keys, no
+# lx.symbol involved - unlike usdInputMap['blend']), duplicated here so this pass has zero dependency on
+# lx/modo/fnpxr: importing ShaderFilters directly would still pull in `import lx` at module level for its
+# other, lx-keyed tables. usdInputMap['effect_gl'] was dead code in ShaderFilters.py (defined, never
+# consulted anywhere) - the glPreview shader was only ever connected for the bump/normal effects,
+# hardcoded inline in _USD_connect_texture_output_to_shader_input; every other texture-driven effect
+# (diffuse color, roughness, specular color, metallic, emission) never reached the preview shader at all.
 #
 # Deliberately out of scope for now: _USD_connect_effect_stack also does a *reverse* lookup, from the
 # resolved usdInputName back into stdMatChannelMap[...]['principled'] (~30 entries), to read the
@@ -36,10 +41,22 @@ USD_INPUT_NAME_BY_EFFECT = {
     "displace": "displacement",
 }
 
+USD_PREVIEW_INPUT_NAME_BY_EFFECT = {
+    "diffColor": "diffuseColor",
+    "lumiColor": "emissiveColor",
+    "specColor": "specularColor",
+    "metallic": "metallic",
+    "lumiAmount": "emissive",
+    "rough": "roughness",
+    "normal": "normal",
+    "displace": "displacement",
+}
+
 
 def normalize_effect_channel_names(xml):
-    """Resolves every channels/effect to its USD (mtlx) input name. Pure transformation, XML -> XML:
-    returns a new tree, the input is left untouched."""
+    """Resolves every channels/effect to its mtlx input name (usdInputName) and its glPreview/
+    UsdPreviewSurface input name (usdPreviewInputName, empty if this effect has no preview equivalent).
+    Pure transformation, XML -> XML: returns a new tree, the input is left untouched."""
     xml = copy.deepcopy(xml)
     for effectEl in xml.iter('effect'):
         _normalize_effect_channel(effectEl)
@@ -49,3 +66,4 @@ def normalize_effect_channel_names(xml):
 def _normalize_effect_channel(effectEl):
     effect = effectEl.get('value')
     effectEl.set('usdInputName', USD_INPUT_NAME_BY_EFFECT.get(effect, ""))
+    effectEl.set('usdPreviewInputName', USD_PREVIEW_INPUT_NAME_BY_EFFECT.get(effect, ""))
