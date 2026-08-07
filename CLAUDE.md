@@ -9,6 +9,14 @@ cohérent avec la direction déjà validée par l'auteur du projet.
 **Dernière mise à jour : 2026-08-07. Les 3 étages du pipeline sont câblés de
 bout en bout et validés dans Modo (voir plus bas).**
 
+**PRIORITAIRE pour la prochaine session : finir le shader glPreview
+(`UsdPreviewSurface`)** — les matériaux texturés apparaissent blancs dans le
+viewport (Storm/Houdini). Cause identifiée et le chantier restant est
+décrit en détail dans la section "Shader glPreview" plus bas (réseau de
+lecture de texture dédié, `UsdUVTexture`/`UsdPrimvarReader_float2`/
+`UsdTransform2d`). Lire cette section en premier avant de proposer autre
+chose.
+
 ## Le projet
 
 Kit Modo qui exporte un shader tree Modo vers USD/MaterialX, pour être
@@ -216,6 +224,60 @@ détecter par pytest seul :
    diagnostic "moved to unused" référençait `newPath` (fuite d'une boucle
    précédente) au lieu de `old_file`.
 
+## Shader glPreview (`UsdPreviewSurface`) — FAIT partiellement (2026-08-07)
+
+`exportGlPreviewMaterial` ne fonctionnait pas du tout avant cette session.
+Quatre bugs réels trouvés et corrigés (indépendants du câblage étage 2/3
+ci-dessus) :
+
+1. `stdMatChannelMap[...]['glPreview']['stencil']` mappait vers
+   `"opacityThreshold"`, absent de `usdTypeMap` → crash quasi garanti
+   (`stencil` existe sur tout `advancedMaterial`). Entrée ajoutée.
+2. `_USD_connect_texture_output_to_shader_input` ne connectait
+   `previewShader` que pour les effets `bump`/`normal` (deux blocs codés en
+   dur) — tous les autres canaux texturés (couleur diffuse, roughness,
+   spéculaire, métallique, émission) n'atteignaient jamais le preview.
+   `normalize_effect_channel_names` résout maintenant aussi
+   `usdPreviewInputName` par effet (table reprise de
+   `usdInputMap['effect_gl']`, qui était du code mort), portée par
+   `context.effectPreviewInputNames` jusqu'au point de connexion générique.
+3. `specAmt`/`luminousAmt` étaient mappés vers `"specular"`/`"emissive"` —
+   des inputs qui **n'existent pas** sur `UsdPreviewSurface` (vérifié via
+   `Sdr.Registry().GetShaderNodeByName('UsdPreviewSurface').GetShaderInputNames()`).
+   `normalize_specular_ior` pondère maintenant `specCol`/`luminousCol` par
+   ces intensités dans un nouvel attribut `usdPreviewValue` (glPreview
+   uniquement ; le shader mtlx continue à lire `usdValue`).
+4. Structure du fichier (connexion `outputs:surface` universel → shader
+   `UsdPreviewSurface`) **vérifiée correcte via l'API USD réelle**
+   (`UsdShade.Material.ComputeSurfaceSource()`, testé avec `usd-core` dans
+   `.venv` sur un vrai bloc `Material` exporté) — donc pas juste une
+   relecture de texte.
+
+**Décision prise en session** : l'`info:id` reste `"UsdPreviewSurface"`
+(schéma canonique, output `surface`) plutôt que le nœud MaterialX-wrappé
+`ND_UsdPreviewSurface_surfaceshader`/`out` que Houdini authore lui-même —
+essayé puis abandonné, motivé uniquement par l'espoir (non confirmé) que ça
+le ferait apparaître dans l'éditeur de graphe de matériaux de Houdini,
+objectif finalement jugé hors scope.
+
+### Limite connue, acceptée pour l'instant
+
+Les matériaux **texturés** apparaissent blancs dans le viewport (Houdini/
+Storm/OpenGL) : `UsdPreviewSurface` et les moteurs de preview temps réel ne
+savent lire les textures qu'à travers une famille de nœuds USD natifs
+spécifique — `UsdUVTexture`, `UsdPrimvarReader_float2`, `UsdTransform2d`
+(vérifiés présents dans `Sdr.Registry()`) — **pas** les nœuds MaterialX
+(`ND_image_color3`, `ND_mix`...) utilisés par le graphe mtlx existant. Les
+matériaux à valeurs constantes (sans texture) sont corrects, puisqu'aucune
+lecture de nœud n'est nécessaire pour eux.
+
+Corriger ça proprement demanderait de construire un **second réseau de
+lecture de texture, en parallèle du graphe mtlx**, dédié au preview
+(`UsdPrimvarReader_float2` → `UsdTransform2d` → `UsdUVTexture`) — un
+chantier de la taille d'une nouvelle étape de construction, pas un simple
+ajustement de mapping. Décision explicite de l'auteur : accepter la limite
+pour l'instant plutôt que de s'y attaquer maintenant.
+
 ## Logging — FAIT : consolidé dans `_DEBUG_diag()`
 
 `_diag` a été renommé `_DEBUG_diag` et généralisé : chaque appel imprime
@@ -300,7 +362,15 @@ Si l'idée revient un jour : ne pas re-tester `UsdMtlx`/`MaterialX` dans Modo,
 c'est déjà tranché ci-dessus. La question à se reposer est plutôt "est-ce que
 l'effort d'un sérialiseur `.mtlx` maison vaut le besoin réel à ce moment-là".
 
-## Prochaines étapes possibles (aucune urgente, à discuter avec l'auteur)
+## Prochaines étapes possibles
+
+0. **PRIORITAIRE** : réseau de lecture de texture dédié au preview
+   (`UsdUVTexture`/`UsdPrimvarReader_float2`/`UsdTransform2d`), pour que les
+   matériaux texturés ne soient plus blancs dans le viewport — voir "Shader
+   glPreview" ci-dessus. Limite acceptée temporairement le 2026-08-07,
+   l'auteur veut y revenir en priorité à la prochaine session.
+
+Le reste, aucune urgence, à discuter avec l'auteur :
 
 1. Trancher la décision n°2 (emplacement des tables `ShaderFilters.py`) si la
    duplication devient gênante.
