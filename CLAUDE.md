@@ -382,13 +382,13 @@ Le reste, aucune urgence, à discuter avec l'auteur :
    immédiate.
 4. Mécanisme générique de reconnexion via `node_registry.py`, si un nouveau
    nœud USD l'exige un jour.
-5. **Mettre à jour `build_lpk.py`** : ne reflète plus tout ce qui a changé
-   cette session (le package `Scripts/python_modules/normalize/`, `tests/`,
-   `pytest.ini`, etc.) — vérifier ce qu'il inclut/packagne réellement pour la
-   distribution. Doit aussi explicitement **ignorer tous les dossiers
-   `__pycache__`** (cohérent avec le `.gitignore` déjà en place — voir
-   "Environnement de dev"). Pas encore regardé, à faire à tête reposée
-   (demandé le 2026-08-07, pas urgent).
+5. ~~Mettre à jour `build_lpk.py`~~ — **FAIT le 2026-08-08** :
+   `ignorepath`/`ignorefiles` excluent maintenant `.venv`, `__pycache__`,
+   `.pytest_cache`, `tests`, `.claude`, `normalize/tools` (outil de dev
+   dépendant de `MaterialX`), `pytest.ini`, `CLAUDE.md`, `.code-workspace`.
+   Vérifié en dry-run (3085 → 18 fichiers) puis en conditions réelles
+   (`.lpk` de 54 Ko généré, `index.xml` régénéré correctement). Corrigé au
+   passage : `index.xml` était dupliqué dans l'archive.
 
 Ne pas réintroduire de logique de cas particulier dans la construction USD —
 c'est précisément ce que cette refonte cherchait à éviter.
