@@ -22,8 +22,8 @@ chose.
 Kit Modo qui exporte un shader tree Modo vers USD/MaterialX, pour être
 réimporté dans Houdini (Karma). Point d'entrée : `Scripts/lxserv/ExportShaderTree.py`
 (commande Modo `exportShaderTree`), qui délègue à
-`Scripts/python_modules/ShaderTree.py` (le cœur du système) et
-`Scripts/python_modules/ShaderFilters.py` (tables de correspondance
+`Scripts/python_modules/ShaderTree.py` (le cœur du système) et le package
+`Scripts/python_modules/ShaderFilters/` (tables de correspondance
 Modo <-> USD).
 
 `fnpxr` = nom donné par Foundry à sa copie interne des bindings Python de
@@ -49,12 +49,16 @@ Vocabulaire XML du shader tree (confirmé par l'auteur) :
   d'`index.cfg` à la racine) : pas besoin de packager en `.lpk` pour
   développer, `build_lpk.py` sert uniquement à la distribution.
 - `ExportShaderTree.py` appelle `reload_modules()` à chaque exécution de la
-  commande dans Modo -> `ShaderTree.py`, `ShaderFilters.py`, et **tout le
-  package `Scripts/python_modules/normalize/`** (5 sous-modules + le package
-  lui-même) sont rechargés à chaud depuis le disque. Seul
-  `ExportShaderTree.py` lui-même nécessite un restart de Modo si modifié
-  (piège vécu en session : un fix dans ce fichier n'était pas actif tant que
-  Modo n'avait pas redémarré, alors que tout le reste rechargeait bien).
+  commande dans Modo -> `ShaderTree.py`, et **les packages
+  `Scripts/python_modules/normalize/` et `Scripts/python_modules/ShaderFilters/`**
+  (sous-modules explicitement listés + le package lui-même, pour chacun)
+  sont rechargés à chaud depuis le disque. Seul `ExportShaderTree.py`
+  lui-même nécessite un restart de Modo si modifié (piège vécu en session :
+  un fix dans ce fichier n'était pas actif tant que Modo n'avait pas
+  redémarré, alors que tout le reste rechargeait bien — et le même piège se
+  reproduit à chaque fois qu'un module simple devient un package : `reload()`
+  ne redescend pas automatiquement dans ses sous-modules, il faut les lister
+  à la main dans `NORMALIZE_MODULES`/`SHADERFILTERS_MODULES`).
 - `.vscode/settings.json` configure l'analyse statique (stubs `lx`/`modo`,
   `extraPaths` vers le Python de Modo, résolution `pxr`). Ça ne permet pas
   d'exécuter le code Modo-dépendant, juste de l'éditer avec autocomplétion.
@@ -64,7 +68,7 @@ Vocabulaire XML du shader tree (confirmé par l'auteur) :
   `Scripts/python_modules/normalize/tools/generate_node_registry.py` pour
   interroger la vraie librairie standard MaterialX) y sont installés. `lx`/
   `modo`/`fnpxr` restent absents — impossible d'exécuter le code Modo-
-  dépendant (`ShaderTree.py`, `ShaderFilters.py`, `ExportShaderTree.py`) hors
+  dépendant (`ShaderTree.py`, `ShaderFilters/`, `ExportShaderTree.py`) hors
   Modo ; `usd-core` est aussi installé mais **n'inclut pas `UsdMtlx`**.
 - `__pycache__/` et `.pytest_cache/` sont dans `.gitignore`.
 - **Convention de commit** : les commits faits par Claude Code dans ce repo
@@ -278,6 +282,40 @@ chantier de la taille d'une nouvelle étape de construction, pas un simple
 ajustement de mapping. Décision explicite de l'auteur : accepter la limite
 pour l'instant plutôt que de s'y attaquer maintenant.
 
+## Package `ShaderFilters/` — FAIT (2026-08-08)
+
+`ShaderFilters.py` (345 lignes, 5 tables sans rapport entre elles, formatage
+incohérent) est devenu `Scripts/python_modules/ShaderFilters/`, un fichier
+par table, même formalisme que `normalize/` (en-tête expliquant le rôle et
+les consommateurs de chaque table). `ShaderTree.py` n'a rien eu à changer —
+`from .ShaderFilters import usdTypeMap` continue de marcher via le
+`__init__.py` qui réexporte tout, comme `normalize/__init__.py`.
+
+- **Tables vivantes** (réellement importées par `ShaderTree.py`) :
+  `channel_types.py` (`channelTypeMap`), `usd_types.py` (`usdTypeMap`),
+  `std_mat_channel_map.py` (`stdMatChannelMap`).
+- **Tables mortes, découvertes en faisant le tri** : `filters.py`
+  (`filters` — jamais consultée nulle part ; le docstring de
+  `_JSON_get_channels` mentionne encore un mécanisme `preFilterChannels`
+  qui n'existe plus dans le code) et `input_map.py` (`usdInputMap` —
+  `uvTile`/`effect_gl`, déjà remplacées par `normalize_uv_wrap_modes.py`/
+  `normalize_effect_channel_names.py` plus tôt en session). **Conservées
+  volontairement** (pas supprimées), marquées clairement "NOT CURRENTLY
+  USED ANYWHERE" — décision de l'auteur en attente : les relancer un jour,
+  ou les supprimer pour de bon.
+- Fidélité du contenu vérifiée par comparaison du multiset de littéraux
+  string entre l'ancien fichier et les nouveaux (identique, à un doublon de
+  clé mort près dans `stdMatChannelMap[...]['principled']` — `"tranRough"`
+  était assigné deux fois, la première valeur silencieusement écrasée par
+  la seconde ; supprimé et documenté).
+- **Bug trouvé en généralisant** : `reload_modules()` rechargeait
+  `ShaderFilters` comme un module simple — devenu un package, ça ne
+  rechargeait plus que son `__init__.py`, pas ses sous-modules (même
+  problème déjà résolu pour `normalize/`, voir "Environnement de dev").
+  Corrigé avec la même liste explicite de sous-modules.
+- `index.xml`/le `.lpk` régénérés via `build_lpk.py` pour refléter les 6
+  nouveaux fichiers du package à la place de l'ancien `ShaderFilters.py`.
+
 ## Logging — FAIT : consolidé dans `_DEBUG_diag()`
 
 `_diag` a été renommé `_DEBUG_diag` et généralisé : chaque appel imprime
@@ -306,10 +344,14 @@ ciblés si un futur bug l'exige.
    passes gardent les noms Modo et ajoutent des attributs `usd*` en plus,
    jamais de renommage. Pas de validation formelle écrite ailleurs que ce
    fichier, mais c'est le pattern suivi partout maintenant.
-2. **Où vivent les tables de `ShaderFilters.py`** : toujours ouvert
-   structurellement. Les tables `blend`/`effect` restent dupliquées dans
-   `normalize/` (risque de drift si `ShaderFilters.py` change) — à trancher
-   si ça devient un problème réel, pas avant.
+2. **Où vivent les tables de `ShaderFilters.py`** : partiellement clarifié le
+   2026-08-08 — `ShaderFilters.py` est devenu le package
+   `Scripts/python_modules/ShaderFilters/`, un fichier par table, même
+   formalisme que `normalize/` (voir section dédiée plus bas). Les tables
+   `blend`/`effect`/`uvTile`/`effect_gl` restent **dupliquées** dans
+   `normalize/` (risque de drift si les originaux changent) — ce n'est pas
+   résolu, juste réorganisé plus lisiblement. À trancher si ça devient un
+   problème réel, pas avant.
 3. **Mécanisme générique de reconnexion (`node_registry.py`)** : volontairement
    pas construit — voir étage 2. Revisiter seulement si un nouveau nœud ne
    rentre plus dans le découpage dual/single actuel.
@@ -372,8 +414,9 @@ l'effort d'un sérialiseur `.mtlx` maison vaut le besoin réel à ce moment-là"
 
 Le reste, aucune urgence, à discuter avec l'auteur :
 
-1. Trancher la décision n°2 (emplacement des tables `ShaderFilters.py`) si la
-   duplication devient gênante.
+1. Trancher la décision n°2 (duplication des tables entre `ShaderFilters/`
+   et `normalize/`) si elle devient gênante. Décider aussi du sort de
+   `ShaderFilters/filters.py` et `input_map.py` (code mort conservé).
 2. Corriger le lookup inverse (décision n°4 ci-dessus) si un cas réel le
    révèle nécessaire.
 3. Simplifier `_USD_export_shadertree` en vraie table de dispatch
