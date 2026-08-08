@@ -3,7 +3,6 @@
 	<kit name="ShaderTreeToUSD" restart="YES">
 		<source target="ShaderTreeToUSD/index.xml" >index.xml</source>
 		<source target="ShaderTreeToUSD/index.cfg" >index.cfg</source>
-		<source target="ShaderTreeToUSD/ShaderTreeToUSD.code-workspace" >ShaderTreeToUSD.code-workspace</source>
 		<source target="ShaderTreeToUSD/README.md" >README.md</source>
 		<source target="ShaderTreeToUSD/Configs/toolbar.cfg" >Configs/toolbar.cfg</source>
 		<source target="ShaderTreeToUSD/Configs/preferences.CFG" >Configs/preferences.CFG</source>
@@ -11,12 +10,15 @@
 		<source target="ShaderTreeToUSD/Configs/icons/Export_32.png" >Configs/icons/Export_32.png</source>
 		<source target="ShaderTreeToUSD/Scripts/Houdini/AssignMaterials.py" >Scripts/Houdini/AssignMaterials.py</source>
 		<source target="ShaderTreeToUSD/Scripts/lxserv/ExportShaderTree.py" >Scripts/lxserv/ExportShaderTree.py</source>
-		<source target="ShaderTreeToUSD/Scripts/lxserv/__pycache__/ExportShaderTree.cpython-310.pyc" >Scripts/lxserv/__pycache__/ExportShaderTree.cpython-310.pyc</source>
-		<source target="ShaderTreeToUSD/Scripts/lxserv/__pycache__/ExportShaderTree.cpython-39.pyc" >Scripts/lxserv/__pycache__/ExportShaderTree.cpython-39.pyc</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderTree.py" >Scripts/python_modules/ShaderTree.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters.py" >Scripts/python_modules/ShaderFilters.py</source>
-		<source target="ShaderTreeToUSD/Scripts/python_modules/__pycache__/ShaderTree.cpython-310.pyc" >Scripts/python_modules/__pycache__/ShaderTree.cpython-310.pyc</source>
-		<source target="ShaderTreeToUSD/Scripts/python_modules/__pycache__/ShaderFilters.cpython-310.pyc" >Scripts/python_modules/__pycache__/ShaderFilters.cpython-310.pyc</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/projection_defaults.py" >Scripts/python_modules/normalize/projection_defaults.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/effect_channel_names.py" >Scripts/python_modules/normalize/effect_channel_names.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/__init__.py" >Scripts/python_modules/normalize/__init__.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/specular_ior.py" >Scripts/python_modules/normalize/specular_ior.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/node_registry.py" >Scripts/python_modules/normalize/node_registry.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/uv_wrap_modes.py" >Scripts/python_modules/normalize/uv_wrap_modes.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/blend_operators.py" >Scripts/python_modules/normalize/blend_operators.py</source>
 	</kit>
 	<message button="Help">ShaderTreeToUSD Kit installation complete.</message>
 </package>

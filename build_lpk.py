@@ -20,8 +20,9 @@ platformSpecifiPath = {
     "libs-linux":"linux"
 }
 
-ignorepath = [".git", ".qodo", ".vscode"]
-ignorefiles = [".DS_Store", ".gitignore", "build_lpk.py"]
+ignorepath = [".git", ".qodo", ".vscode", ".claude", ".venv", "__pycache__", ".pytest_cache", "tests",
+              os.path.join("normalize", "tools")]
+ignorefiles = [".DS_Store", ".gitignore", "build_lpk.py", "pytest.ini", "CLAUDE.md", "ShaderTreeToUSD.code-workspace"]
 
 def listFiles(kitPath):
     '''
@@ -84,8 +85,8 @@ def create_lpk_archive(kitFolder, kitName, files):
     # Create a new zip file
     with zipfile.ZipFile(lpk_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
         # Add index.xml to the root of the archive
-        index_path = os.path.join(kitFolder, 'index.xml')
-        zipf.write(index_path, 'index.xml')
+        # index_path = os.path.join(kitFolder, 'index.xml')
+        # zipf.write(index_path, 'index.xml')
         
         # Add all other files
         for file_path in files:
