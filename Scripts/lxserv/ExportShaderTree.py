@@ -15,11 +15,12 @@ except ImportError:
     from imp import reload
     from importlib import import_module
 
-# ShaderTree imports from these (`from .normalize import normalize as normalize_shadertree`), but
-# reload(ST) only re-executes ShaderTree.py itself, not the modules it imports - so without reloading
-# these explicitly first, edits under normalize/ would need a Modo restart to take effect, unlike
-# ShaderTree.py/ShaderFilters.py. Submodules first, package __init__.py last, so the package's
-# `from .specular_ior import ...`-style lines rebind to the freshly reloaded submodules.
+# ShaderTree imports from these packages (`from .normalize import normalize as normalize_shadertree`,
+# `from .ShaderFilters import usdTypeMap` etc.), but reload(ST) only re-executes ShaderTree.py itself,
+# not the modules it imports - so without reloading these explicitly first, edits under normalize/ or
+# ShaderFilters/ would need a Modo restart to take effect, unlike ShaderTree.py itself. Submodules first,
+# package __init__.py last, so each package's `from .some_submodule import ...` lines rebind to the
+# freshly reloaded submodules.
 NORMALIZE_MODULES = [
     "python_modules.normalize.specular_ior",
     "python_modules.normalize.blend_operators",
@@ -29,18 +30,29 @@ NORMALIZE_MODULES = [
     "python_modules.normalize",
 ]
 
+SHADERFILTERS_MODULES = [
+    "python_modules.ShaderFilters.channel_types",
+    "python_modules.ShaderFilters.usd_types",
+    "python_modules.ShaderFilters.std_mat_channel_map",
+    "python_modules.ShaderFilters.filters",
+    "python_modules.ShaderFilters.input_map",
+    "python_modules.ShaderFilters",
+]
+
+def _reload_or_import(module_name):
+    if module_name in sys.modules:
+        reload(sys.modules[module_name])
+    else:
+        import_module(module_name)
+
 def reload_modules():
     global ST, SF
     for module_name in NORMALIZE_MODULES:
-        if module_name in sys.modules:
-            reload(sys.modules[module_name])
-        else:
-            import_module(module_name)
+        _reload_or_import(module_name)
 
-    if SF is not None:
-        reload(SF)
-    else:
-        import python_modules.ShaderFilters as SF
+    for module_name in SHADERFILTERS_MODULES:
+        _reload_or_import(module_name)
+    SF = sys.modules["python_modules.ShaderFilters"]
 
     if ST is not None:
         reload(ST)

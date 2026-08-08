@@ -11,7 +11,6 @@
 		<source target="ShaderTreeToUSD/Scripts/Houdini/AssignMaterials.py" >Scripts/Houdini/AssignMaterials.py</source>
 		<source target="ShaderTreeToUSD/Scripts/lxserv/ExportShaderTree.py" >Scripts/lxserv/ExportShaderTree.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderTree.py" >Scripts/python_modules/ShaderTree.py</source>
-		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters.py" >Scripts/python_modules/ShaderFilters.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/projection_defaults.py" >Scripts/python_modules/normalize/projection_defaults.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/effect_channel_names.py" >Scripts/python_modules/normalize/effect_channel_names.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/__init__.py" >Scripts/python_modules/normalize/__init__.py</source>
@@ -19,6 +18,12 @@
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/node_registry.py" >Scripts/python_modules/normalize/node_registry.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/uv_wrap_modes.py" >Scripts/python_modules/normalize/uv_wrap_modes.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/blend_operators.py" >Scripts/python_modules/normalize/blend_operators.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters/channel_types.py" >Scripts/python_modules/ShaderFilters/channel_types.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters/__init__.py" >Scripts/python_modules/ShaderFilters/__init__.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters/input_map.py" >Scripts/python_modules/ShaderFilters/input_map.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters/std_mat_channel_map.py" >Scripts/python_modules/ShaderFilters/std_mat_channel_map.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters/usd_types.py" >Scripts/python_modules/ShaderFilters/usd_types.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderFilters/filters.py" >Scripts/python_modules/ShaderFilters/filters.py</source>
 	</kit>
 	<message button="Help">ShaderTreeToUSD Kit installation complete.</message>
 </package>

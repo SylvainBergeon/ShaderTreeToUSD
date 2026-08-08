@@ -9,16 +9,16 @@ import copy
 # The tables below mirror ShaderFilters.usdInputMap['effect'] and ['effect_gl'] (plain string keys, no
 # lx.symbol involved - unlike usdInputMap['blend']), duplicated here so this pass has zero dependency on
 # lx/modo/fnpxr: importing ShaderFilters directly would still pull in `import lx` at module level for its
-# other, lx-keyed tables. usdInputMap['effect_gl'] was dead code in ShaderFilters.py (defined, never
-# consulted anywhere) - the glPreview shader was only ever connected for the bump/normal effects,
+# other, lx-keyed tables. usdInputMap['effect_gl'] was dead code in ShaderFilters/input_map.py (defined,
+# never consulted anywhere) - the glPreview shader was only ever connected for the bump/normal effects,
 # hardcoded inline in _USD_connect_texture_output_to_shader_input; every other texture-driven effect
 # (diffuse color, roughness, specular color, metallic, emission) never reached the preview shader at all.
 #
 # Deliberately out of scope for now: _USD_connect_effect_stack also does a *reverse* lookup, from the
 # resolved usdInputName back into stdMatChannelMap[...]['principled'] (~30 entries), to read the
 # advancedMaterial's own default value as a fallback when no texture is connected. That table is bigger,
-# also lives in ShaderFilters.py, and duplicating it here risks drifting from the source of truth - left
-# for when the "where do ShaderFilters tables live" question (CLAUDE.md, open decision) is settled.
+# also lives in ShaderFilters/std_mat_channel_map.py, and duplicating it here risks drifting from the
+# source of truth - left for when CLAUDE.md's "where do ShaderFilters tables live" decision is settled.
 USD_INPUT_NAME_BY_EFFECT = {
     "diffColor": "base_color",
     "diffAmount": "base",
