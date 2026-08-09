@@ -51,9 +51,9 @@ def test_known_effects_resolve_to_their_usd_input_name(effect, expected_input_na
     ("lumiColor", "emissiveColor"),
     ("specColor", "specularColor"),
     ("metallic", "metallic"),
-    ("lumiAmount", "emissive"),
     ("rough", "roughness"),
     ("normal", "normal"),
+    ("bump", "normal"),  # bump and normal both drive UsdPreviewSurface's single "normal" input
     ("displace", "displacement"),
 ])
 def test_known_effects_resolve_to_their_glpreview_input_name(effect, expected_preview_input_name):
@@ -65,12 +65,24 @@ def test_known_effects_resolve_to_their_glpreview_input_name(effect, expected_pr
 
 
 def test_effects_with_no_glpreview_equivalent_are_marked_unresolved():
-    # e.g. bump, stencil, objectNormal: mtlx-only, no UsdPreviewSurface input for them
-    layer = make_layer("bump")
+    # e.g. stencil, objectNormal: mtlx-only, no UsdPreviewSurface input for them
+    layer = make_layer("stencil")
 
     result = normalize_effect_channel_names(layer)
 
-    assert effect_el(result).get('usdInputName') == "normal" # has an mtlx equivalent...
+    assert effect_el(result).get('usdInputName') == "opacity" # has an mtlx equivalent...
+    assert effect_el(result).get('usdPreviewInputName') == "" # ...but not a glPreview one
+
+
+def test_lumi_amount_has_no_glpreview_equivalent():
+    # UsdPreviewSurface has no standalone emissive-intensity input (only color3f emissiveColor) -
+    # unlike the other effects above, this isn't a made-up/future case, it was a real bug: this table
+    # used to map lumiAmount to "emissive", an input that doesn't exist on UsdPreviewSurface.
+    layer = make_layer("lumiAmount")
+
+    result = normalize_effect_channel_names(layer)
+
+    assert effect_el(result).get('usdInputName') == "emission" # has an mtlx equivalent...
     assert effect_el(result).get('usdPreviewInputName') == "" # ...but not a glPreview one
 
 

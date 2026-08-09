@@ -53,6 +53,11 @@ class ShadingContext:
     effectsStack:OrderedDict = OrderedDict()
     effectUsdInputNames:dict = {} # effectName (Modo) -> usdInputName, set alongside effectsStack
     effectPreviewInputNames:dict = {} # effectName (Modo) -> usdPreviewInputName ("" if no glPreview equivalent)
+    # effectName (Modo) -> UsdShade.Output (native texture read) or a literal value (constant layer).
+    # Populated only for effects with a usdPreviewInputName, from the *last* enabled layer seen for
+    # that effect - true cross-layer blending isn't representable in Storm's fixed preview node
+    # catalog, so "last layer wins" is the closest approximation. Reset per mask, alongside effectsStack.
+    previewOutputs:dict = {}
 
 class shaderConnector:
     name:str
@@ -122,9 +127,26 @@ def _initialize_preferences():
     export_diagnostic = lx.eval('user.value USDExport_saveDiagnostic ?')
     verbose = lx.eval('user.value USDExport_verbose ?')
     verbose_modify_tree = lx.eval('user.value USDExport_verboseModifyTree ?')
-    
+
+# Modo's "(default)" colorspace sentinel (imageMap/videoStill/channels/colorspace) doesn't mean "no
+# transform" - it resolves to one of these 4 Preferences > Color Management settings depending on the
+# image's own bit depth (confirmed live: "pref.value colormanagement.<category>_default_colorspace ?",
+# each returning "<ociodConfigName>:<colorspaceName>", e.g. "nuke-default:sRGB" - config prefix stripped
+# here since normalize/colorspace.py only wants the bare colorspace name). Scene/installation-wide, not a
+# per-texture value - read once per export, same as _initialize_preferences.
+colorspaceDefaultByCategory = {}
+
+def _initialize_colormanagement_defaults():
+    """Initialize the global colorspaceDefaultByCategory dict from Modo's 4 color management preferences."""
+    global colorspaceDefaultByCategory
+    colorspaceDefaultByCategory = {}
+    for category in ("8bit", "16bit", "float", "numeric"):
+        rawValue = lx.eval(f'pref.value colormanagement.{category}_default_colorspace ?')
+        colorspaceDefaultByCategory[category] = rawValue.split(":", 1)[-1] if rawValue else ""
+
 # Call this function at the start of your script or before using the preferences
 _initialize_preferences()
+_initialize_colormanagement_defaults()
 
 # Command hook
 def export_basic_execute(Cmd_obj, msg):
@@ -156,10 +178,12 @@ def export_basic_execute(Cmd_obj, msg):
     xml_shadertree = _XML_export_item(renderer)
     #------- Normalized copy: every advancedMaterial channel gets a usdValue (gtr/principled-overridden
     #------- where normalize_specular_ior applies, a straight copy of value otherwise), plus resolved
-    #------- usdOperator/usdProjType/usdInputName attributes from the other 3 passes (see
-    #------- Scripts/python_modules/normalize/). USD construction reads only this tree - the mtlx shader
-    #------- via usdValue, the glPreview shader via the untouched value on the same tree.
-    xml_shadertree_normalized = normalize_shadertree(xml_shadertree)
+    #------- usdOperator/usdProjType/usdInputName attributes from the other passes (see
+    #------- Scripts/python_modules/normalize/) - colorspaceDefaultByCategory (see
+    #------- _initialize_colormanagement_defaults) is passed in since normalize_colorspace needs those
+    #------- live-queried preferences but can't query lx itself. USD construction reads only this tree -
+    #------- the mtlx shader via usdValue, the glPreview shader via the untouched value on the same tree.
+    xml_shadertree_normalized = normalize_shadertree(xml_shadertree, colorspaceDefaultByCategory)
 
     #----------- Write files
     #----------- as Json
@@ -294,7 +318,6 @@ def _XML_get_channels(item:modo.Item):
             xml_out.append(xmlChan)
     
     return xml_out
-
 
 
 #////////////////////////////////////// JSON
@@ -498,6 +521,7 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
 
             #-------------------------------------------------------- Reset stacks
             context.effectsStack = OrderedDict()
+            context.previewOutputs = {}
 
             #-------------------------------------------------------- Restore: this mask's material must not
             #-------------------------------------------------------- leak into siblings or the enclosing mask
@@ -522,9 +546,21 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
             _DEBUG_diag("USD_Create", xml.tag, f"Create IMAGEMAP at [{path}] as [{effectName}]")
             
             textureOutput:UsdShade.Output = _USD_create_texture_output(stage, context, xml, sdfType)
-            
+
             #---------------------------------------------------- Add output to the current effect stack in context
             context = _USD_add_shader_connector_to_context(xml, textureOutput, context)
+
+            #---------------------------------------------------- Build the native glPreview texture-reading
+            #---------------------------------------------------- network for this layer, if it drives a real
+            #---------------------------------------------------- UsdPreviewSurface input. "Last layer wins":
+            #---------------------------------------------------- overwrites any earlier layer for this effect.
+            if exportGlPreviewMaterial:
+                previewInputName = effectChannel.get('usdPreviewInputName')
+                if previewInputName:
+                    previewSdfType = usdTypeMap[previewInputName]
+                    previewOutput = _USD_create_preview_texture_output(stage, context, xml, previewSdfType, previewInputName)
+                    if previewOutput != None:
+                        context.previewOutputs[effectName] = previewOutput
     
     elif elementName == "noise":
         #------------------------------------------------------- If imageMap, set USD graph with adjustments based on still image properties and effects
@@ -557,12 +593,21 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
             materialPath = material.GetPath()
             
             _DEBUG_diag("USD_Create", xml.tag, f"Create CONSTANT at [{path}] as [{effectName}]")
-            
+
             constantOutput = _USD_create_constant(stage, materialPath, xml, sdfType)
-            
+
             #---------------------------------------------------- Add output to the current effect stack in context
             context = _USD_add_shader_connector_to_context(xml, constantOutput, context)
-        
+
+            #---------------------------------------------------- glPreview: no node needed for a flat value -
+            #---------------------------------------------------- store the raw value string, same convention
+            #---------------------------------------------------- _USD_create_shader_input already expects for
+            #---------------------------------------------------- literals (it eval()s it per sdfType)
+            if exportGlPreviewMaterial:
+                previewInputName = effectChannel.get('usdPreviewInputName')
+                if previewInputName:
+                    context.previewOutputs[effectName] = xml.find('channels/value').get('value')
+
     elif elementName == 'advancedMaterial':
         #------------------------------------------------------- If material, create shader at defined path
         # -------------------------------------------------- if has no context, then do nothing, as it's probably a shader that's outside a mask
@@ -713,6 +758,16 @@ def _USD_connect_operator(stage, connector:shaderConnector, input:UsdShade.Outpu
 
     else:
         #----------------------------------------------------- Set opacity as mix
+        #----------------------------------------------------- fg = this new layer, bg = the accumulated stack
+        #----------------------------------------------------- from below - so at mix=0 (opacity 0) this always
+        #----------------------------------------------------- fades to "bg", the accumulated stack, matching
+        #----------------------------------------------------- the usual "0% opacity = no visible effect"
+        #----------------------------------------------------- convention. A same-direction fg/bg swap was
+        #----------------------------------------------------- tried for ND_minus and this whole family
+        #----------------------------------------------------- (Photoshop-style blend modes) after a Modo-vs-
+        #----------------------------------------------------- Houdini comparison suggested Modo ran "Subtract"
+        #----------------------------------------------------- the other way round - reverted, the author
+        #----------------------------------------------------- concluded it was probably wrong.
         operator.CreateInput('fg', output.GetTypeName()).ConnectToSource(output)
         _USD_set_or_connect(operator, 'bg', output.GetTypeName(), input)
         operator.CreateInput('mix', Sdf.ValueTypeNames.Float).Set(opacity)
@@ -823,11 +878,10 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
             
             #---------------------------------------------------- Connect normalMap to shader input
             shader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(textureOutput.GetOutput('out'))
-            
-            #---------------------------------------------------- Connect texture to previewShader input
-            if (exportGlPreviewMaterial):
-                previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-        
+
+            #---------------------------------------------------- previewShader is connected further down,
+            #---------------------------------------------------- generically, from context.previewOutputs
+
         elif effectName == "normal":
             #---------------------------------------------------- Create texture definition even if modo layer is disabled
             textureOutput:UsdShade.Shader = output
@@ -846,11 +900,10 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
             
             #---------------------------------------------------- Connect normalMap to shader input
             shader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-            
-            #---------------------------------------------------- Connect texture to previewShader input
-            if (exportGlPreviewMaterial):
-                previewShader.CreateInput("normal", Sdf.ValueTypeNames.Vector3f).ConnectToSource(normalShader.GetOutput('out'))
-        
+
+            #---------------------------------------------------- previewShader is connected further down,
+            #---------------------------------------------------- generically, from context.previewOutputs
+
         elif effectName == "displace":
             #---------------------------------------------------- Retrieve displace value in parent/channels node
             displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
@@ -873,17 +926,22 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
         else:
             result = _USD_create_shader_input(shader, inputName, output, usdTypeMap[inputName])
 
-        #---------------------------------------------------- Also connect to the glPreview shader, if
-        #---------------------------------------------------- this effect has a UsdPreviewSurface input
-        #---------------------------------------------------- (bump has none - see effectPreviewInputNames)
+        #---------------------------------------------------- Also connect to the glPreview shader, if this
+        #---------------------------------------------------- effect has a UsdPreviewSurface input AND a
+        #---------------------------------------------------- native preview network was actually built for
+        #---------------------------------------------------- it (context.previewOutputs - see the imageMap/
+        #---------------------------------------------------- constant branches in _USD_export_shadertree).
+        #---------------------------------------------------- The mtlx `output` itself is never connected
+        #---------------------------------------------------- here: it's a MaterialX node graph Storm can't
+        #---------------------------------------------------- read, which is what made textures show white.
         if exportGlPreviewMaterial:
             previewInputName = context.effectPreviewInputNames.get(effectName)
-            if previewInputName:
-                previewInput = previewShader.GetInput(previewInputName)
-                if previewInput.Get() != None:
-                    previewInput.ConnectToSource(output)
-                else:
-                    _USD_create_shader_input(previewShader, previewInputName, output, usdTypeMap[previewInputName])
+            if previewInputName and effectName in context.previewOutputs:
+                previewValue = context.previewOutputs[effectName]
+                # _USD_create_shader_input already dispatches connect (UsdShade.Output) vs literal .Set()
+                # - CreateInput() is idempotent, so this safely overrides the literal default that
+                # _USD_create_mtlx_standard_surface_shader already set on this same input.
+                _USD_create_shader_input(previewShader, previewInputName, previewValue, usdTypeMap[previewInputName])
 
         return result
 
@@ -1012,13 +1070,17 @@ def _USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, 
     return None
 
 # Create an USD definition of a modo constant 
-def _USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output: 
+def _USD_create_constant(stage:Usd.Stage, path:Path, xml:ET.Element, outType:Sdf.ValueTypeNames) -> UsdShade.Output:
     #---------------------------------------------------- Create texture definition even if modo layer is disabled
     constantPath:Path = path.AppendPath(_UTIL_clean_name(xml.get('name')))
     constantShader = UsdShade.Shader.Define(stage, constantPath)
     constantShader.CreateIdAttr("ND_constant" + _UTIL_get_node_type_prefix(outType))
+    # NOTE: channel name assumed to be "value" (mirrors noise's value1/value2 convention) - verify
+    # against a real Modo export; constant layers had never actually authored a value before this
+    # fix (this node's "value" input was left unset entirely).
+    constantShader.CreateInput("value", outType).Set(_UTIL_parse_value_string(xml.find('channels/value').get('value')))
     output:UsdShade.Output = constantShader.CreateOutput("out", outType)
-    
+
     return output
 
 # Create an USD definition of a modo 3D texture (noise only actually)
@@ -1110,9 +1172,30 @@ def _USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.E
     textureOutput:UsdShade.Output
 
     if usdProjType == "uv":
-        #---------------------------------------------------- Create the UV texture transform node
-        textureTransformOutput = _USD_create_UV_texture_transform(stage, materialPath, xml)
-        #---------------------------------------------------- Create the UV texture node
+        #---------------------------------------------------- Create the UV texture node. No transform node is
+        #---------------------------------------------------- built for the mtlx render shader - Karma's
+        #---------------------------------------------------- MaterialX-to-Hydra translation resolves an
+        #---------------------------------------------------- unconnected "texcoord" input to the mesh's default
+        #---------------------------------------------------- UV set on its own (confirmed by the author testing
+        #---------------------------------------------------- directly in Houdini), which sidesteps whatever was
+        #---------------------------------------------------- breaking the explicit UsdPrimvarReader_float2->
+        #---------------------------------------------------- UsdTransform2d chain tried earlier. Trade-off:
+        #---------------------------------------------------- wrapU/wrapV/uvRotation/m02/m12 no longer reach
+        #---------------------------------------------------- ND_image at all (only ND_tiledimage's own uvtiling/
+        #---------------------------------------------------- uvoffset still apply - it has no rotation input
+        #---------------------------------------------------- either way, see _USD_create_UV_texture).
+        #---------------------------------------------------- "texcoord" IS still explicitly connected, though,
+        #---------------------------------------------------- when this layer names a specific UV map
+        #---------------------------------------------------- (txtrLocator/channels/uvMap, e.g. Modo's "Texture"/
+        #---------------------------------------------------- "texture2") rather than relying on the mesh's
+        #---------------------------------------------------- whichever-is-default one - a mesh can have several
+        #---------------------------------------------------- UV sets, and Modo lets each texture layer pick one
+        #---------------------------------------------------- by name. See _USD_create_UV_texcoord_reader for how
+        #---------------------------------------------------- (ND_geompropvalue_vector2, not UsdPrimvarReader_
+        #---------------------------------------------------- float2 - the latter isn't a real MaterialX node and
+        #---------------------------------------------------- doesn't resolve as a UV source inside a compiled
+        #---------------------------------------------------- mtlx graph).
+        textureTransformOutput = _USD_create_UV_texcoord_reader(stage, materialPath, xml)
         textureOutput = _USD_create_UV_texture(stage, materialPath, xml, outType, textureTransformOutput)
 
     else: # usdProjType == "triplanar"
@@ -1155,27 +1238,216 @@ def _USD_create_triplanar_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Ele
     
     return textureOutput
 
+# ND_tiledimage (its own repeat/tiling via "uvtiling") is used only when both axes are Modo's "repeat"
+# tile mode - Houdini resolves it to a working glPreview automatically without our native network (see
+# CLAUDE.md's "Shader glPreview" section), which ND_image never did. ND_tiledimage has no per-axis
+# address-mode input at all though (it's inherently a tiling node), so edge/mirror/reset still need
+# ND_image, which does support the full uaddressmode/vaddressmode range - hence the split rather than
+# switching unconditionally.
+def _USD_uses_mtlx_tiledimage(xml:ET.Element) -> bool:
+    return (xml.find('txtrLocator/channels/tileU').get('value') == "repeat"
+            and xml.find('txtrLocator/channels/tileV').get('value') == "repeat")
+
+# A mesh can have several UV maps in Modo, named by string ("Texture", "texture2", ...) and selected per
+# texture layer via txtrLocator/channels/uvMap - not an index. Geometry reaches Houdini via Alembic, where
+# these UV maps become primvars named identically (confirmed by the author). ND_geompropvalue_vector2 is
+# MaterialX's own node for reading a named geometric property into a material graph (verified against the
+# real MaterialX standard library: inputs "geomprop" (string), output "out" (vector2)) - UsdPrimvarReader_
+# float2, tried first, is a native USD/Hydra node rather than an actual MaterialX one, and the author
+# confirmed in Houdini that it does not get resolved as a UV source inside the compiled mtlx graph the way
+# ND_geompropvalue_vector2 does. Also not an index-based lookup like MaterialX's own
+# ND_texcoord_vector2("index"), which is what turned out to be unresolvable in Karma's translation earlier
+# this session (see Round 3). Returns None when uvMap is unset/empty (common - most layers just use the
+# mesh's default UV set), leaving "texcoord" unconnected as before.
+def _USD_create_UV_texcoord_reader(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
+    uvMapChannel = xml.find('txtrLocator/channels/uvMap')
+    uvMapName = uvMapChannel.get('value') if uvMapChannel != None else ""
+    if not uvMapName:
+        return None
+
+    texturePath = str(path) + "/" + xml.get('name')
+    uvmap = UsdShade.Shader.Define(stage, texturePath + "_uvmap")
+    uvmap.CreateIdAttr('ND_geompropvalue_vector2')
+    uvmap.CreateInput('geomprop', Sdf.ValueTypeNames.String).Set(uvMapName)
+    return uvmap.CreateOutput('out', Sdf.ValueTypeNames.Float2)
+
 def _USD_create_UV_texture(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
     texturePath:Path = materialPath.AppendPath(_UTIL_clean_name(xml.get('name')))
     textureItem = xml.find('videoStill/channels/filename')
-    
+
     textureFilePath = ""
     if textureItem != None: textureFilePath = textureItem.get('value')
-    
+
     #------------------------------------------------------ Override texture filepath with $HIP consolidated path
     if consolidateScene: textureFilePath = _UTIL_get_consolidated_relative_path(textureList[textureFilePath])
-    
-    #---------------------------------------------------- Create the UV texture node
+
+    #---------------------------------------------------- Create the UV texture node. textureTransformInput is
+    #---------------------------------------------------- None for the mtlx render path (see _USD_create_texture_
+    #---------------------------------------------------- output) - "texcoord" is left unconnected, and Karma
+    #---------------------------------------------------- resolves that to the mesh's default UV set on its own.
     texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_uvTexture")
-    texture.CreateIdAttr('ND_image' + _UTIL_get_node_type_prefix(outType))
-    texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
-    texture.CreateInput('file', Sdf.ValueTypeNames.Asset).Set(textureFilePath)
-    texture.CreateInput('wrapS', Sdf.ValueTypeNames.String).Set(xml.find('txtrLocator/channels/tileU').get('usdWrapMode'))
-    texture.CreateInput('wrapT', Sdf.ValueTypeNames.String).Set(xml.find('txtrLocator/channels/tileV').get('usdWrapMode'))
+    if textureTransformInput != None:
+        texture.CreateInput("texcoord", Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
+    fileInput = texture.CreateInput('file', Sdf.ValueTypeNames.Asset)
+    fileInput.Set(textureFilePath)
+    #---------------------------------------------------- Colorspace: MaterialX has no dedicated runtime
+    #---------------------------------------------------- input for this, it's metadata on the "file" input
+    #---------------------------------------------------- itself (colorSpace, a generic USD attribute field -
+    #---------------------------------------------------- SetColorSpace()/GetColorSpace() - not mtlx-specific).
+    colorspaceChannel = xml.find('videoStill/channels/colorspace')
+    if colorspaceChannel != None and colorspaceChannel.get('usdColorSpace'):
+        fileInput.GetAttr().SetColorSpace(colorspaceChannel.get('usdColorSpace'))
+
+    if _USD_uses_mtlx_tiledimage(xml):
+        texture.CreateIdAttr('ND_tiledimage' + _UTIL_get_node_type_prefix(outType))
+        wrapU = float(xml.find('txtrLocator/channels/wrapU').get('value'))
+        wrapV = float(xml.find('txtrLocator/channels/wrapV').get('value'))
+        texture.CreateInput('uvtiling', Sdf.ValueTypeNames.Float2).Set((wrapU, wrapV))
+        # m02/m12 (UV offset) is set on ND_tiledimage's own uvoffset input, purpose-built for tiled
+        # placement (unlike ND_image, which has neither uvtiling nor uvoffset). ND_tiledimage's real
+        # formula (verified against the MaterialX standard library's own NG_tiledimage_* nodegraph
+        # source, with realworldimagesize/realworldtilesize left at their default (1,1)) is
+        # "texcoord*uvtiling - uvoffset" - uvtiling scales from the UV origin (0,0), not from the
+        # tile's center (0.5,0.5) the way Modo's own wrapU/wrapV scaling does (confirmed by the author:
+        # the texture visibly shifted whenever wrapU/wrapV != 1). Baking a compensating
+        # 0.5*(uvtiling-1) into uvoffset re-centers the scale on (0.5,0.5) while still reducing to the
+        # plain m02/m12 offset when uvtiling is (1,1) - no behavior change for that common case.
+        m02 = float(xml.find('txtrLocator/channels/m02').get('value'))
+        m12 = float(xml.find('txtrLocator/channels/m12').get('value'))
+        uvoffsetU = m02 + 0.5 * (wrapU - 1.0)
+        uvoffsetV = m12 + 0.5 * (wrapV - 1.0)
+        texture.CreateInput('uvoffset', Sdf.ValueTypeNames.Float2).Set((uvoffsetU, uvoffsetV))
+    else:
+        texture.CreateIdAttr('ND_image' + _UTIL_get_node_type_prefix(outType))
+        # NOTE: ND_image's real MaterialX input names are uaddressmode/vaddressmode (not wrapS/wrapT,
+        # which are UsdUVTexture's native input names, used correctly by the glPreview network instead)
+        # - wrapS/wrapT here never matched a real nodedef input, so Modo's wrap mode never actually
+        # reached the mtlx render output before this fix, always silently defaulting to "periodic".
+        texture.CreateInput('uaddressmode', Sdf.ValueTypeNames.String).Set(xml.find('txtrLocator/channels/tileU').get('usdWrapMode'))
+        texture.CreateInput('vaddressmode', Sdf.ValueTypeNames.String).Set(xml.find('txtrLocator/channels/tileV').get('usdWrapMode'))
+
     textureOutput:UsdShade.Output = texture.CreateOutput('out', outType)
-    
+
     return textureOutput
-    
+
+# Native counterpart to _USD_create_UV_texture, for the glPreview texture-reading network. Defines a
+# UsdUVTexture (Storm/Hydra-recognized) reading the same file. Approximates the "invert" and
+# "brightness" per-layer adjustments via UsdUVTexture's own scale/bias inputs (value*scale+bias,
+# applied uniformly per component - commutes with output-port selection so applying it before
+# picking r/g/b/a/rgb below gives the same result as the mtlx path's per-channel order). Channel
+# swizzle / alpha-only extraction is exact (a real output port, not an approximation) and mandatory
+# regardless, to get the connected types to match. "contrast" and the min/max remap have no native
+# equivalent and are not applied here - the preview texture reads unadjusted for those.
+def _USD_create_preview_UV_texture(stage:Usd.Stage, path:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, previewInputName:str, textureTransformInput:UsdShade.Output) -> UsdShade.Output:
+    texturePath:Path = path.AppendPath(_UTIL_clean_name(xml.get('name')))
+    textureItem = xml.find('videoStill/channels/filename')
+
+    textureFilePath = ""
+    if textureItem != None: textureFilePath = textureItem.get('value')
+
+    #------------------------------------------------------ Override texture filepath with $HIP consolidated path
+    if consolidateScene and textureFilePath != "": textureFilePath = _UTIL_get_consolidated_relative_path(textureList[textureFilePath])
+
+    isNormal = previewInputName == "normal"
+    invert = int(xml.find("channels/invert").get('value'))
+    brightness = float(xml.find('channels/brightness').get('value'))
+
+    #---------------------------------------------------- Approximate invert (1-x) and brightness (x*b)
+    if invert:
+        scale = [-brightness] * 4
+        bias = [1.0] * 4
+    else:
+        scale = [brightness] * 4
+        bias = [0.0] * 4
+
+    if isNormal:
+        #------------------------------------------------ Unpack an 8-bit [0,1] normal map into tangent-space
+        #------------------------------------------------ [-1,1], per UsdPreviewSurface.inputs:normal's own doc
+        scale = [s * 2.0 for s in scale[:3]] + [scale[3]]
+        bias = [b - 1.0 for b in bias[:3]] + [bias[3]]
+
+    #---------------------------------------------------- Create the UV texture node. textureTransformInput is
+    #---------------------------------------------------- None now (see _USD_create_preview_texture_output) -
+    #---------------------------------------------------- "st" is left unconnected, matching the mtlx render
+    #---------------------------------------------------- path's treatment of "texcoord".
+    texture:UsdShade.Shader = UsdShade.Shader.Define(stage, str(texturePath) + "_preview_uvTexture")
+    texture.CreateIdAttr('UsdUVTexture')
+    if textureTransformInput != None:
+        texture.CreateInput('st', Sdf.ValueTypeNames.Float2).ConnectToSource(textureTransformInput)
+    fileInput = texture.CreateInput('file', Sdf.ValueTypeNames.Asset)
+    fileInput.Set(textureFilePath)
+    texture.CreateInput('wrapS', Sdf.ValueTypeNames.Token).Set(xml.find('txtrLocator/channels/tileU').get('usdNativeWrapMode'))
+    texture.CreateInput('wrapT', Sdf.ValueTypeNames.Token).Set(xml.find('txtrLocator/channels/tileV').get('usdNativeWrapMode'))
+    texture.CreateInput('scale', Sdf.ValueTypeNames.Float4).Set(tuple(scale))
+    texture.CreateInput('bias', Sdf.ValueTypeNames.Float4).Set(tuple(bias))
+    #---------------------------------------------------- Colorspace: set on both the "file" input's colorSpace
+    #---------------------------------------------------- metadata (same free-form value as the mtlx path -
+    #---------------------------------------------------- belt and suspenders for whatever actually reads it)
+    #---------------------------------------------------- and UsdUVTexture's own sourceColorSpace input, whose
+    #---------------------------------------------------- enum is only raw/sRGB/auto - unlike the metadata, it
+    #---------------------------------------------------- can't represent an arbitrary Modo/OCIO colorspace
+    #---------------------------------------------------- name, so anything else falls back to "auto" (let the
+    #---------------------------------------------------- renderer decide) for that input specifically.
+    #---------------------------------------------------- Tangent-space normal data must never be color-
+    #---------------------------------------------------- transformed regardless of the texture's own setting,
+    #---------------------------------------------------- so isNormal always wins on both.
+    if isNormal:
+        usdColorSpace = 'raw'
+    else:
+        colorspaceChannel = xml.find('videoStill/channels/colorspace')
+        usdColorSpace = colorspaceChannel.get('usdColorSpace') if colorspaceChannel != None else None
+
+    if usdColorSpace:
+        fileInput.GetAttr().SetColorSpace(usdColorSpace)
+
+    if usdColorSpace == 'raw':
+        sourceColorSpace = 'raw'
+    elif usdColorSpace != None and usdColorSpace.lower() == 'srgb':
+        sourceColorSpace = 'sRGB'
+    else:
+        sourceColorSpace = 'auto'
+    texture.CreateInput('sourceColorSpace', Sdf.ValueTypeNames.Token).Set(sourceColorSpace)
+
+    #---------------------------------------------------- Pick the output port matching outType/swizzle/alpha
+    alphaMode = xml.find('channels/alpha').get('value')
+    swizzling = xml.find('channels/swizzling').get('value') == "1"
+    swizzlingOut = xml.find('channels/rgba').get('value')
+
+    if alphaMode == "only":
+        outputPort = 'a'
+    elif swizzling:
+        outputPort = {'red': 'r', 'green': 'g', 'blue': 'b', 'alpha': 'a'}[swizzlingOut]
+    elif outType == Sdf.ValueTypeNames.Float:
+        outputPort = 'r'
+    else:
+        outputPort = 'rgb'
+
+    portType = Sdf.ValueTypeNames.Float3 if outputPort == 'rgb' else Sdf.ValueTypeNames.Float
+    return texture.CreateOutput(outputPort, portType)
+
+# Orchestrates the glPreview texture-reading network for a single imageMap layer, mirroring
+# _USD_create_texture_output's mtlx orchestration. Returns None (no preview connection is made) when
+# there's nothing representable in Storm's fixed preview node catalog: triplanar projection (no native
+# triplanar equivalent) or no texture file at all.
+def _USD_create_preview_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.Element, outType:Sdf.ValueTypeNames, previewInputName:str) -> UsdShade.Output:
+    material:UsdShade.Material = context.material
+    materialPath = material.GetPath()
+
+    projTypeChannel = xml.find('txtrLocator/channels/projType')
+    usdProjType = projTypeChannel.get('usdProjType')
+    if usdProjType != "uv":
+        return None
+
+    textureItem = xml.find('videoStill/channels/filename')
+    if textureItem is None or textureItem.get('value') == "":
+        return None
+
+    #---------------------------------------------------- No texcoord reader/transform node is built here
+    #---------------------------------------------------- either (see _USD_create_texture_output's mtlx
+    #---------------------------------------------------- side, Round 4) - "st" is left unconnected on the
+    #---------------------------------------------------- UsdUVTexture node, same as the mtlx render path.
+    return _USD_create_preview_UV_texture(stage, materialPath, xml, outType, previewInputName, None)
+
 def _USD_create_texture_adjust_nodegraph(stage:Usd.Stage, materialPath:Path, xml:ET.Element, outType:Sdf.ValueTypeNames, textureInput:UsdShade.Output) -> UsdShade.Output:
     #---------------------------------------------------- Create the texture layer
     texturePath:Path = materialPath.AppendPath(_UTIL_clean_name(xml.get('name')))
@@ -1266,40 +1538,6 @@ def _USD_create_texture_adjust_nodegraph(stage:Usd.Stage, materialPath:Path, xml
     
     return textureAdjustNodeGraph.GetOutput('out')
 
-def _USD_create_UV_texture_transform(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
-    """
-    Create a UV texture locator on the given USD stage.
-
-    This function defines a texture reader and a UV coordinate transformer
-    shader on the specified USD stage. It uses XML data to set the scale,
-    translation, and rotation inputs for the UV transformation. The function
-    returns the output of the UV transformation shader.
-
-    Parameters:
-        stage (Usd.Stage): The USD stage where the shaders will be defined.
-        path (Path): The path used to name the shaders.
-        xml (ET.Element): XML element containing texture locator data.
-
-    Returns:
-        UsdShade.Output: The output of the UV transformation shader.
-    """
-    texturePath = str(path) + "/" + xml.get('name')
-    #---------------------------------------------------- Create the texture reader
-    stReader = UsdShade.Shader.Define(stage, texturePath + "_streader")
-    stReader.CreateIdAttr('ND_texcoord_vector2')
-    stReader.CreateInput('index', Sdf.ValueTypeNames.Int).Set(0)
-    stOutput:UsdShade.Output = stReader.CreateOutput('out', Sdf.ValueTypeNames.TexCoord2f)
-    
-    #---------------------------------------------------- Create the uv coordinates
-    uvTransform = UsdShade.Shader.Define(stage, texturePath + "_transform")
-    uvTransform.CreateIdAttr('UsdTransform2d')
-    uvTransform.CreateInput('in', Sdf.ValueTypeNames.TexCoord2f).ConnectToSource(stOutput)
-    uvTransform.CreateInput('scale', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/wrapU').get('value')),float(xml.find('txtrLocator/channels/wrapV').get('value'))))
-    uvTransform.CreateInput('translation', Sdf.ValueTypeNames.Float2).Set((float(xml.find('txtrLocator/channels/m02').get('value')),float(xml.find('txtrLocator/channels/m12').get('value'))))
-    uvTransform.CreateInput('rotation', Sdf.ValueTypeNames.Float).Set(360 * float(xml.find('txtrLocator/channels/uvRotation').get('value')) / (2 * math.pi))
-    textureTransformOutput:UsdShade.Output = uvTransform.CreateOutput('result', Sdf.ValueTypeNames.TexCoord2f)
-    
-    return textureTransformOutput
 
 def _USD_create_3D_texture_transform(stage:Usd.Stage, path:Path, xml:ET.Element) -> UsdShade.Output:
     """
@@ -1433,6 +1671,14 @@ def _UTIL_get_key_from_value(dict, value)->str:
         if val == value:
             return key
     return "None"
+
+# Parse a Modo channel value string ("0.5" or "(r, g, b)") into a Python float or tuple of floats.
+def _UTIL_parse_value_string(valueString:str):
+    cleaned = valueString.strip()
+    if cleaned.startswith(("(", "[")) and cleaned.endswith((")", "]")):
+        cleaned = cleaned[1:-1]
+    parts = [float(v.strip()) for v in cleaned.split(",") if v.strip()]
+    return parts[0] if len(parts) == 1 else tuple(parts)
 
 # Format any channel value to given type
 def _UTIL_format_channel_value(channel:modo.Channel): 

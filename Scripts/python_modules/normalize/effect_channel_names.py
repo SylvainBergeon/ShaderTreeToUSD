@@ -46,10 +46,14 @@ USD_PREVIEW_INPUT_NAME_BY_EFFECT = {
     "lumiColor": "emissiveColor",
     "specColor": "specularColor",
     "metallic": "metallic",
-    "lumiAmount": "emissive",
     "rough": "roughness",
     "normal": "normal",
+    "bump": "normal",  # bump and normal both drive UsdPreviewSurface's single "normal" input
     "displace": "displacement",
+    # lumiAmount deliberately absent: UsdPreviewSurface has no standalone emissive-intensity input
+    # (only color3f emissiveColor) - verified against the real shaderDefs.usda shipped with usd-core.
+    # Modulating emissiveColor by a lumiAmount texture would need a native multiply node, which isn't
+    # in Storm's fixed preview catalog - same class of limitation as contrast/min-max remap.
 }
 
 

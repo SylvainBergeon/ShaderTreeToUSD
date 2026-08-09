@@ -20,19 +20,21 @@ def tile_el(imageMap, tag):
     return imageMap.find(f'.//{tag}')
 
 
-@pytest.mark.parametrize("tile,expected", [
-    ("reset", "black"),
-    ("repeat", "periodic"),
-    ("edge", "clamp"),
-    ("mirror", "mirror"),
+@pytest.mark.parametrize("tile,expected,expectedNative", [
+    ("reset", "constant", "black"),
+    ("repeat", "periodic", "repeat"),
+    ("edge", "clamp", "clamp"),
+    ("mirror", "mirror", "mirror"),
 ])
-def test_known_tile_modes_resolve_to_their_usd_wrap_mode(tile, expected):
+def test_known_tile_modes_resolve_to_their_usd_wrap_mode(tile, expected, expectedNative):
     locator = make_locator(tileU=tile, tileV=tile)
 
     result = normalize_uv_wrap_modes(locator)
 
     assert tile_el(result, 'tileU').get('usdWrapMode') == expected
     assert tile_el(result, 'tileV').get('usdWrapMode') == expected
+    assert tile_el(result, 'tileU').get('usdNativeWrapMode') == expectedNative
+    assert tile_el(result, 'tileV').get('usdNativeWrapMode') == expectedNative
     assert tile_el(result, 'tileU').get('value') == tile # raw value untouched
 
 
@@ -41,7 +43,7 @@ def test_tileu_and_tilev_are_resolved_independently():
 
     result = normalize_uv_wrap_modes(locator)
 
-    assert tile_el(result, 'tileU').get('usdWrapMode') == "black"
+    assert tile_el(result, 'tileU').get('usdWrapMode') == "constant"
     assert tile_el(result, 'tileV').get('usdWrapMode') == "mirror"
 
 

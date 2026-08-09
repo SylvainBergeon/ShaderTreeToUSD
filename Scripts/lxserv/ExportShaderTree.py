@@ -26,6 +26,8 @@ NORMALIZE_MODULES = [
     "python_modules.normalize.blend_operators",
     "python_modules.normalize.projection_defaults",
     "python_modules.normalize.effect_channel_names",
+    "python_modules.normalize.uv_wrap_modes",
+    "python_modules.normalize.colorspace",
     "python_modules.normalize.node_registry",
     "python_modules.normalize",
 ]
