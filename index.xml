@@ -13,6 +13,7 @@
 		<source target="ShaderTreeToUSD/Scripts/python_modules/ShaderTree.py" >Scripts/python_modules/ShaderTree.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/projection_defaults.py" >Scripts/python_modules/normalize/projection_defaults.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/effect_channel_names.py" >Scripts/python_modules/normalize/effect_channel_names.py</source>
+		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/colorspace.py" >Scripts/python_modules/normalize/colorspace.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/__init__.py" >Scripts/python_modules/normalize/__init__.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/specular_ior.py" >Scripts/python_modules/normalize/specular_ior.py</source>
 		<source target="ShaderTreeToUSD/Scripts/python_modules/normalize/node_registry.py" >Scripts/python_modules/normalize/node_registry.py</source>
