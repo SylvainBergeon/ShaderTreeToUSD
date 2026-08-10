@@ -87,6 +87,20 @@ logUndefined = None
 
 xml_diagnostic = None
 
+# Emoji prefix per sectionName for console readability - purely cosmetic, has no effect on what's
+# recorded in the diagnostic XML.
+LOG_ICON_BY_SECTION = {
+    "Files": "💾",
+    "Renaming": "🏷️",
+    "USD_Create": "📍",
+    "USD_CreateShader": "🎱",
+    "USD_Connect": "🔗",
+    "SetValue": "🎚️",
+    "Unsupported": "‼️",
+    "Undefined": "⁉️",
+    "Consolidate": "📦",
+}
+
 def _DEBUG_diag(sectionName:str, diagElementName:str, diagtext:str):
     """
     Reports a diagnostic message: prints it to the console (gated per sectionName by one of the 4
@@ -112,7 +126,8 @@ def _DEBUG_diag(sectionName:str, diagElementName:str, diagtext:str):
         "Unsupported": logUndefined,
     }
     if logEnabledBySection.get(sectionName):
-        print(diagtext)
+        icon = LOG_ICON_BY_SECTION.get(sectionName)
+        print(f"{icon} {diagtext}" if icon else diagtext)
 
     if not export_diagnostic: return
 
