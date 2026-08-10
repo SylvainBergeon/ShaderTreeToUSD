@@ -4,3 +4,5 @@
 Scripts/pxr-stubs
 __pycache__/
 .pytest_cache/
+ShaderTreeToUSD.code-workspace
+tests/
