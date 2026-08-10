@@ -21,14 +21,11 @@ NORMALIZATION_PASSES = [
     normalize_projection_defaults,
     normalize_effect_channel_names,
     normalize_uv_wrap_modes,
+    normalize_colorspace,
 ]
 
 
-def normalize(xml, colorspaceDefaultByCategory=None):
-    """colorspaceDefaultByCategory: Stage 1's 4 live-queried color management preferences (see
-    ShaderTree.py's _initialize_colormanagement_defaults) - normalize_colorspace needs it as a parameter
-    rather than querying lx itself, so it's called separately here instead of living in
-    NORMALIZATION_PASSES with the other (argument-less) passes."""
+def normalize(xml):
     for normalization_pass in NORMALIZATION_PASSES:
         xml = normalization_pass(xml)
-    return normalize_colorspace(xml, colorspaceDefaultByCategory)
+    return xml

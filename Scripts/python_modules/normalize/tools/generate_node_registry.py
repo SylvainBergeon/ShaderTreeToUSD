@@ -19,7 +19,7 @@ DYNAMIC_FAMILIES = [
     "ND_multiply", "ND_divide", "ND_mix", "ND_plus", "ND_minus",
     "ND_screen", "ND_burn", "ND_dodge", "ND_difference", "ND_overlay",
     # texture adjust nodegraph / stencil
-    "ND_invert", "ND_constant", "ND_triplanarprojection", "ND_image", "ND_tiledimage", "ND_remap", "ND_contrast",
+    "ND_invert", "ND_constant", "ND_triplanarprojection", "ND_image", "ND_remap", "ND_contrast",
 ]
 TYPE_SUFFIXES = ["_float", "_color3", "_color4"] # matches _UTIL_get_node_type_prefix's only 3 outputs
 
@@ -27,13 +27,22 @@ FIXED_IDS = [
     "ND_round_float", "ND_bump_vector3", "ND_displacement_float",
     "ND_unifiednoise3d_float", "ND_normal_vector3", "ND_separate4_color4",
     "ND_position_vector3", "ND_multiply_vector3", "ND_rotate3d_vector3", "ND_add_vector3",
-    "ND_standard_surface_surfaceshader", "ND_geompropvalue_vector2",
+    "ND_standard_surface_surfaceshader", "ND_geompropvalue_vector2", "ND_UsdTransform2d",
+    # Explicit texcoord tiling math (texcoord*uvtiling - uvoffset) feeding ND_image, reproducing
+    # ND_tiledimage's own internal formula (see NG_tiledimage_* in the standard library) so the mtlx path
+    # can have both independent per-axis tiling and a real wrap-mode enum - ND_tiledimage itself hardcodes
+    # uaddressmode/vaddressmode to "periodic" internally and has no way to expose edge/mirror/reset.
+    "ND_multiply_vector2", "ND_subtract_vector2",
     # ShaderTree.py:867 uses the bare id "ND_normalmap", which does NOT exist in the MaterialX standard
     # library (only ND_normalmap_float and ND_normalmap_vector2 do) - looks like a real bug. The scale
     # input is set as a plain float there, so ND_normalmap_float is very likely the intended id.
     "ND_normalmap_float",
-    # Not MaterialX nodes - included to document that they're a different mechanism entirely:
-    "UsdPreviewSurface", "UsdTransform2d",
+    # Not a MaterialX node - included to document that it's a different mechanism entirely (USD's own
+    # Sdr/UsdShaders shader registry, not ND_-prefixed). ND_tiledimage is no longer used anywhere in
+    # ShaderTree.py (replaced by ND_image + explicit tiling math above, see CLAUDE.md); the native, bare
+    # "UsdTransform2d" schema id (as opposed to the real MaterialX-wrapped "ND_UsdTransform2d" above)
+    # isn't used anywhere either - it never resolved as a node inside a compiled mtlx graph in Karma.
+    "UsdPreviewSurface",
 ]
 
 

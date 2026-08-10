@@ -1,27 +1,23 @@
 import copy
 
-# Ported from ShaderTree.py's _USD_create_UV_texture, which looked up
-# ShaderFilters.usdInputMap['uvTile'][...] for both tileU and tileV at construction time. This pass
-# resolves it once, up front, and writes the result as a usdWrapMode attribute alongside the untouched
-# raw Modo value. These are the real MaterialX ND_image uaddressmode/vaddressmode enum tokens
-# (constant/clamp/periodic/mirror - verified against the standalone MaterialX standard library), NOT
-# UsdUVTexture's native wrapS/wrapT tokens (black/clamp/repeat/mirror - see USD_NATIVE_WRAP_MODE_BY_TILE
-# below). "reset" used to map to "black" here, a native-only token that doesn't exist in ND_image's
-# enum - combined with ShaderTree.py authoring it under the wrong input names entirely (wrapS/wrapT
-# instead of uaddressmode/vaddressmode), Modo's wrap mode never actually reached the mtlx render output.
-USD_WRAP_MODE_BY_TILE = {
-    "reset": "constant",
-    "repeat": "periodic",
+# Native UsdUVTexture.wrapS/wrapT tokens (black/clamp/repeat/mirror - verified against usd-core's
+# shaderDefs.usda). Used by the glPreview texture-reading network (_USD_create_preview_UV_texture), which
+# reads UsdUVTexture directly.
+USD_NATIVE_WRAP_MODE_BY_TILE = {
+    "reset": "black",
+    "repeat": "repeat",
     "edge": "clamp",
     "mirror": "mirror",
 }
 
-# Native UsdUVTexture.wrapS/wrapT use "repeat", not MaterialX's "periodic" - every other token
-# coincides. Used by the glPreview texture-reading network (_USD_create_preview_UV_texture), which
-# reads UsdUVTexture directly rather than going through an ND_image_* MaterialX node.
-USD_NATIVE_WRAP_MODE_BY_TILE = {
-    "reset": "black",
-    "repeat": "repeat",
+# MaterialX ND_image's uaddressmode/vaddressmode enum (constant/clamp/periodic/mirror - verified against
+# the real MaterialX standard library, see node_registry.py). Used by the mtlx render path
+# (_USD_create_UV_texture): "reset" maps to "constant", not the native table's "black" - that's a
+# UsdUVTexture-specific token, not a valid value in ND_image's enum. "repeat" maps to "periodic", the
+# MaterialX name for the same behavior.
+USD_WRAP_MODE_BY_TILE = {
+    "reset": "constant",
+    "repeat": "periodic",
     "edge": "clamp",
     "mirror": "mirror",
 }
@@ -39,5 +35,5 @@ def normalize_uv_wrap_modes(xml):
 
 def _normalize_tile_channel(tileEl):
     tile = tileEl.get('value')
-    tileEl.set('usdWrapMode', USD_WRAP_MODE_BY_TILE.get(tile, ""))
     tileEl.set('usdNativeWrapMode', USD_NATIVE_WRAP_MODE_BY_TILE.get(tile, ""))
+    tileEl.set('usdWrapMode', USD_WRAP_MODE_BY_TILE.get(tile, ""))

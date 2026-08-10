@@ -65,9 +65,7 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
 
     def __init__(self):
         lxu.command.BasicCommand.__init__(self)
-        self.dyna_Add('item', '&item')
-        self.basic_SetFlags(0, lx.symbol.fCMDARG_OPTIONAL)
-        
+
         # Define each preference with its default value and group
         preferences = {
             #---------------------------------------------------- Export options
@@ -78,8 +76,10 @@ class Cmd_ExportShaderTree(lxu.command.BasicCommand):
             'USDExport_consolidateScene': False,
             'USDExport_saveDiagnostic': True,
             #---------------------------------------------------- Event log message
-            'USDExport_verbose': False,
-            'USDExport_verboseModifyTree': True,
+            'USDExport_logValueChange': True,
+            'USDExport_logTreeChange': True,
+            'USDExport_logFileManagement': True,
+            'USDExport_logUndefined': True,
             #---------------------------------------------------- USD options
             'USDExport_exportGlPreviewMaterial': False
         }

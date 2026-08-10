@@ -8,12 +8,13 @@
 # inputs?" instead of hardcoding per-node shapes like the current dual/single split in normalize_blend_
 # operators does for exactly the 10 blend operators it knows about.
 #
-# Not currently used anywhere - infrastructure for whatever comes after the 4 normalization passes.
+# Not currently used anywhere - infrastructure for whatever comes after the 6 normalization passes.
 #
-# Two ids used in ShaderTree.py are deliberately absent: UsdPreviewSurface and UsdTransform2d are not
-# MaterialX nodes at all (no ND_ prefix) - they come from USD's own Sdr/UsdShaders shader registry, a
-# different mechanism this table doesn't cover.
+# One id used in ShaderTree.py is deliberately absent: UsdPreviewSurface is not a MaterialX node at all
+# (no ND_ prefix) - it comes from USD's own Sdr/UsdShaders shader registry, a different mechanism this
+# table doesn't cover.
 NODE_DEFS = {
+    'ND_UsdTransform2d': {'inputs': (('in', 'vector2'), ('rotation', 'float'), ('scale', 'vector2'), ('translation', 'vector2')), 'output': 'vector2'},
     'ND_add_vector3': {'inputs': (('in1', 'vector3'), ('in2', 'vector3')), 'output': 'vector3'},
     'ND_bump_vector3': {'inputs': (('height', 'float'), ('scale', 'float'), ('normal', 'vector3'), ('tangent', 'vector3'), ('bitangent', 'vector3')), 'output': 'vector3'},
     'ND_burn_color3': {'inputs': (('fg', 'color3'), ('bg', 'color3'), ('mix', 'float')), 'output': 'color3'},
@@ -51,6 +52,7 @@ NODE_DEFS = {
     'ND_multiply_color3': {'inputs': (('in1', 'color3'), ('in2', 'color3')), 'output': 'color3'},
     'ND_multiply_color4': {'inputs': (('in1', 'color4'), ('in2', 'color4')), 'output': 'color4'},
     'ND_multiply_float': {'inputs': (('in1', 'float'), ('in2', 'float')), 'output': 'float'},
+    'ND_multiply_vector2': {'inputs': (('in1', 'vector2'), ('in2', 'vector2')), 'output': 'vector2'},
     'ND_multiply_vector3': {'inputs': (('in1', 'vector3'), ('in2', 'vector3')), 'output': 'vector3'},
     'ND_normal_vector3': {'inputs': (('space', 'string'),), 'output': 'vector3'},
     'ND_normalmap_float': {'inputs': (('in', 'vector3'), ('scale', 'float'), ('normal', 'vector3'), ('tangent', 'vector3'), ('bitangent', 'vector3')), 'output': 'vector3'},
@@ -71,9 +73,7 @@ NODE_DEFS = {
     'ND_screen_float': {'inputs': (('fg', 'float'), ('bg', 'float'), ('mix', 'float')), 'output': 'float'},
     'ND_separate4_color4': {'inputs': (('in', 'color4'),), 'output': 'multioutput'},
     'ND_standard_surface_surfaceshader': {'inputs': (('base', 'float'), ('base_color', 'color3'), ('diffuse_roughness', 'float'), ('metalness', 'float'), ('specular', 'float'), ('specular_color', 'color3'), ('specular_roughness', 'float'), ('specular_IOR', 'float'), ('specular_anisotropy', 'float'), ('specular_rotation', 'float'), ('transmission', 'float'), ('transmission_color', 'color3'), ('transmission_depth', 'float'), ('transmission_scatter', 'color3'), ('transmission_scatter_anisotropy', 'float'), ('transmission_dispersion', 'float'), ('transmission_extra_roughness', 'float'), ('subsurface', 'float'), ('subsurface_color', 'color3'), ('subsurface_radius', 'color3'), ('subsurface_scale', 'float'), ('subsurface_anisotropy', 'float'), ('sheen', 'float'), ('sheen_color', 'color3'), ('sheen_roughness', 'float'), ('coat', 'float'), ('coat_color', 'color3'), ('coat_roughness', 'float'), ('coat_anisotropy', 'float'), ('coat_rotation', 'float'), ('coat_IOR', 'float'), ('coat_normal', 'vector3'), ('coat_affect_color', 'float'), ('coat_affect_roughness', 'float'), ('thin_film_thickness', 'float'), ('thin_film_IOR', 'float'), ('emission', 'float'), ('emission_color', 'color3'), ('opacity', 'color3'), ('thin_walled', 'boolean'), ('normal', 'vector3'), ('tangent', 'vector3')), 'output': 'surfaceshader'},
-    'ND_tiledimage_color3': {'inputs': (('file', 'filename'), ('default', 'color3'), ('texcoord', 'vector2'), ('uvtiling', 'vector2'), ('uvoffset', 'vector2'), ('realworldimagesize', 'vector2'), ('realworldtilesize', 'vector2'), ('filtertype', 'string'), ('framerange', 'string'), ('frameoffset', 'integer'), ('frameendaction', 'string')), 'output': 'color3'},
-    'ND_tiledimage_color4': {'inputs': (('file', 'filename'), ('default', 'color4'), ('texcoord', 'vector2'), ('uvtiling', 'vector2'), ('uvoffset', 'vector2'), ('realworldimagesize', 'vector2'), ('realworldtilesize', 'vector2'), ('filtertype', 'string'), ('framerange', 'string'), ('frameoffset', 'integer'), ('frameendaction', 'string')), 'output': 'color4'},
-    'ND_tiledimage_float': {'inputs': (('file', 'filename'), ('default', 'float'), ('texcoord', 'vector2'), ('uvtiling', 'vector2'), ('uvoffset', 'vector2'), ('realworldimagesize', 'vector2'), ('realworldtilesize', 'vector2'), ('filtertype', 'string'), ('framerange', 'string'), ('frameoffset', 'integer'), ('frameendaction', 'string')), 'output': 'float'},
+    'ND_subtract_vector2': {'inputs': (('in1', 'vector2'), ('in2', 'vector2')), 'output': 'vector2'},
     'ND_triplanarprojection_color3': {'inputs': (('filex', 'filename'), ('filey', 'filename'), ('filez', 'filename'), ('layerx', 'string'), ('layery', 'string'), ('layerz', 'string'), ('default', 'color3'), ('position', 'vector3'), ('normal', 'vector3'), ('upaxis', 'integer'), ('blend', 'float'), ('filtertype', 'string'), ('framerange', 'string'), ('frameoffset', 'integer'), ('frameendaction', 'string')), 'output': 'color3'},
     'ND_triplanarprojection_color4': {'inputs': (('filex', 'filename'), ('filey', 'filename'), ('filez', 'filename'), ('layerx', 'string'), ('layery', 'string'), ('layerz', 'string'), ('default', 'color4'), ('position', 'vector3'), ('normal', 'vector3'), ('upaxis', 'integer'), ('blend', 'float'), ('filtertype', 'string'), ('framerange', 'string'), ('frameoffset', 'integer'), ('frameendaction', 'string')), 'output': 'color4'},
     'ND_triplanarprojection_float': {'inputs': (('filex', 'filename'), ('filey', 'filename'), ('filez', 'filename'), ('layerx', 'string'), ('layery', 'string'), ('layerz', 'string'), ('default', 'float'), ('position', 'vector3'), ('normal', 'vector3'), ('upaxis', 'integer'), ('blend', 'float'), ('filtertype', 'string'), ('framerange', 'string'), ('frameoffset', 'integer'), ('frameendaction', 'string')), 'output': 'float'},

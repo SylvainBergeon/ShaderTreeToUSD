@@ -20,21 +20,21 @@ def tile_el(imageMap, tag):
     return imageMap.find(f'.//{tag}')
 
 
-@pytest.mark.parametrize("tile,expected,expectedNative", [
-    ("reset", "constant", "black"),
-    ("repeat", "periodic", "repeat"),
+@pytest.mark.parametrize("tile,expectedNative,expectedMtlx", [
+    ("reset", "black", "constant"),
+    ("repeat", "repeat", "periodic"),
     ("edge", "clamp", "clamp"),
     ("mirror", "mirror", "mirror"),
 ])
-def test_known_tile_modes_resolve_to_their_usd_wrap_mode(tile, expected, expectedNative):
+def test_known_tile_modes_resolve_to_their_usd_native_and_mtlx_wrap_mode(tile, expectedNative, expectedMtlx):
     locator = make_locator(tileU=tile, tileV=tile)
 
     result = normalize_uv_wrap_modes(locator)
 
-    assert tile_el(result, 'tileU').get('usdWrapMode') == expected
-    assert tile_el(result, 'tileV').get('usdWrapMode') == expected
     assert tile_el(result, 'tileU').get('usdNativeWrapMode') == expectedNative
     assert tile_el(result, 'tileV').get('usdNativeWrapMode') == expectedNative
+    assert tile_el(result, 'tileU').get('usdWrapMode') == expectedMtlx
+    assert tile_el(result, 'tileV').get('usdWrapMode') == expectedMtlx
     assert tile_el(result, 'tileU').get('value') == tile # raw value untouched
 
 
@@ -43,6 +43,8 @@ def test_tileu_and_tilev_are_resolved_independently():
 
     result = normalize_uv_wrap_modes(locator)
 
+    assert tile_el(result, 'tileU').get('usdNativeWrapMode') == "black"
+    assert tile_el(result, 'tileV').get('usdNativeWrapMode') == "mirror"
     assert tile_el(result, 'tileU').get('usdWrapMode') == "constant"
     assert tile_el(result, 'tileV').get('usdWrapMode') == "mirror"
 
@@ -52,6 +54,7 @@ def test_unknown_tile_mode_is_marked_unresolved_rather_than_raising():
 
     result = normalize_uv_wrap_modes(locator) # must not raise
 
+    assert tile_el(result, 'tileU').get('usdNativeWrapMode') == ""
     assert tile_el(result, 'tileU').get('usdWrapMode') == ""
 
 
@@ -60,7 +63,7 @@ def test_input_tree_is_never_mutated():
 
     normalize_uv_wrap_modes(locator)
 
-    assert tile_el(locator, 'tileU').get('usdWrapMode') is None
+    assert tile_el(locator, 'tileU').get('usdNativeWrapMode') is None
 
 
 def test_tiles_nested_anywhere_in_the_tree_are_normalized():
@@ -69,7 +72,7 @@ def test_tiles_nested_anywhere_in_the_tree_are_normalized():
 
     result = normalize_uv_wrap_modes(root)
 
-    assert result.find('.//tileU').get('usdWrapMode') == "clamp"
+    assert result.find('.//tileU').get('usdNativeWrapMode') == "clamp"
 
 
 def test_layers_without_tile_channels_are_left_alone():

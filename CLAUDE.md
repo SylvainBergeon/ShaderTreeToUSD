@@ -6,7 +6,7 @@ puis le travail effectué dans Claude Code pour la mettre en œuvre. Il sert de
 point de reprise : lis-le avant de proposer des changements pour rester
 cohérent avec la direction déjà validée par l'auteur du projet.
 
-**Dernière mise à jour : 2026-08-09. Les 3 étages du pipeline sont câblés de
+**Dernière mise à jour : 2026-08-10. Les 3 étages du pipeline sont câblés de
 bout en bout et validés dans Modo (voir plus bas).**
 
 **Contexte important (2026-08-08, fin de session)** : dans le setup de
@@ -61,8 +61,11 @@ OCIO, pas un petit enum comme les wrap/blend modes). Câblé en métadonnée
 bretelles). **Confirmé par l'auteur (2026-08-09)** : la différence de
 rendu perçue comme "colorspace" a disparu une fois le pivot de tuilage du
 Round 8 corrigé — c'était le même symptôme que le Round 6, pas un bug de
-colorspace. **Décision de l'auteur : ne plus toucher à ce système, il
-fonctionne correctement et pourra servir dans d'autres cas.**
+colorspace. **Décision de l'auteur (2026-08-09) : ne plus toucher à ce
+système, il fonctionne correctement et pourra servir dans d'autres cas.**
+**Revenu dessus au Round 19 (2026-08-10)** : le système à 4 préférences
+Modo décrit ci-dessous a été retiré, remplacé par une table de mapping
+directe bien plus simple - voir Round 19 pour le raisonnement.
 
 Round 8 (bug réel, pivot de tuilage `ND_tiledimage`, **CONFIRMÉ CORRIGÉ
 DANS HOUDINI**, 2026-08-09) : l'UV map n'était pas alignée pareil entre
@@ -100,17 +103,26 @@ simplement l'UV set par défaut du mesh. Vérifié structurellement contre
 `usd-core`. Portée volontairement limitée au graphe mtlx (le sujet du
 jour) — le réseau glPreview n'a pas été retouché.
 
-**PRIORITAIRE pour la prochaine session** : re-exporter depuis Modo et
-confirmer dans Houdini que `rainbowh_Image_2` (`Shaderball_Material`, la
-seule couche du fichier de test utilisant une UV map non-défaut,
-`"texture2"`) lit maintenant la bonne UV map via le code (la solution
-elle-même est déjà validée à la main, reste à confirmer que le code généré
-correspond). Décider si le compromis
-rotation/scale/offset du Round 4 (`ND_image`, wrap edge/mirror/reset, et
-`uvRotation` dans tous les cas — toujours non porté par rien côté mtlx)
-est acceptable tel quel, ou s'il faut lui appliquer le même genre de
-correction que le Round 8. Rester vigilant sur bump/normal/`<constant>`,
-toujours non exercés par le fichier de test "PF_ShaderBall_base".
+**Toutes les transformations UV (sélection d'UV map, rotation à pivot
+centré, tuilage, pan) sont confirmées correctes dans Houdini (Round 9-15,
+clos).** Les 4 wrap modes mtlx (`periodic`/`clamp`/`mirror`/`constant`)
+sont aussi tous testés dans Houdini (Round 10/11/17, clos) :
+`periodic`/`clamp` fonctionnent, `mirror`/`constant` sont des limitations
+Houdini connues et diagnostiquées (`_DEBUG_diag`), pas des bugs de ce kit.
+**PRIORITAIRE pour la prochaine session** : le système de colorspace a été
+simplifié aux Round 19-21 (table directe `MODO_COLORSPACE_TO_USD`, système
+à 4 préférences du Round 7 retiré). 9 entrées sont posées (`"(default)"`
++ 8 dérivées du vrai `cmlib` mtlx pour la config `foundry-v1`), aucune
+encore confirmée en rendu réel dans Houdini - à vérifier. Les 5 autres
+configs OCIO de Modo (`aces`/`Foundry-WideGamut`/`nuke-default`/
+`spi-anim`/`spi-vfx`) résolvent sur `""` (diagnostiqué en console/XML,
+Round 21) jusqu'à ce qu'elles soient ajoutées à la table. Le bug d'origine
+qui a lancé
+cette discussion (mtlx ne force pas `"raw"`/l'équivalent pour les normal
+maps, contrairement à glPreview - voir la session du 2026-08-10 avant le
+Round 19) reste **non résolu**. Rester vigilant sur bump/normal/
+`<constant>` (la couche, pas le wrap mode), toujours non exercés par le
+fichier de test "PF_ShaderBall_base".
 
 ## Le projet
 
@@ -933,6 +945,741 @@ test "PF_ShaderBall_base" a un cas concret pour vérifier : `rainbowh_Image_2`
 `diffColor`) utilise `"texture2"`, différent de `"Texture"` utilisé
 partout ailleurs.
 
+#### Round 10, réconciliation ND_image/ND_tiledimage — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS HOUDINI (2026-08-10)
+
+Entre la fin du Round 9 et cette session, une modification jamais tracée
+dans ce fichier (faite hors session Claude Code suivie, jamais commit)
+avait supprimé la branche `ND_image` entièrement au profit d'un unique
+chemin `ND_tiledimage` (commentaire "author's call" laissé dans le code,
+mais la décision elle-même n'a jamais été documentée ici) — au prix de
+perdre tout wrap mode edge/mirror/reset sur le graphe mtlx. L'auteur a
+reposé la question en session : ce compromis (`ND_image` = pas de tuilage
+indépendant par axe sans skew, `wrapU`/`wrapV` ignorés ; `ND_tiledimage` =
+pas de wrap mode) est-il une vraie limite MaterialX, ou un manque
+d'implémentation côté Houdini ?
+
+Vérifié directement contre le paquet `MaterialX` standalone dans `.venv`
+(nodedefs réels, pas les stubs) :
+- `ND_image_*` a bien `uaddressmode`/`vaddressmode` avec les 4 valeurs
+  `constant`/`clamp`/`periodic`/`mirror` dans son enum — un vrai wrap mode
+  par axe existe au niveau du schéma.
+- Le vrai *nodegraph* d'implémentation de `ND_tiledimage_*`
+  (`NG_tiledimage_*` dans `stdlib_ng.mtlx`, pas juste le nodedef) est
+  strictement : `multiply`(texcoord, uvtiling) → `subtract`(uvoffset) →
+  `image` avec `uaddressmode`/`vaddressmode` **codés en dur à
+  `"periodic"`**. Autrement dit `ND_tiledimage` **n'est rien de plus qu'un
+  `ND_image` précédé de ce calcul de tuilage**, avec le wrap mode figé — la
+  dichotomie observée par l'auteur n'est pas une limite structurelle de
+  MaterialX, c'est un artefact du nœud de confort `ND_tiledimage`,
+  contournable en reconstruisant soi-même ce calcul en amont d'un
+  `ND_image`. Composer une échelle non-uniforme puis une rotation (l'ordre
+  utilisé ici et dans `ND_tiledimage`) ne produit d'ailleurs pas de skew —
+  une matrice `rotation × échelle` préserve l'orthogonalité — donc pas de
+  risque théorique à reconstruire ce calcul à la main.
+- L'implémentation GLSL de référence de `mx_image_color3` (livrée avec le
+  paquet `MaterialX`, `stdlib/genglsl/mx_image_color3.glsl`) ne fait
+  **aucun** calcul de wrap en shader — elle appelle `texture(...)` tel quel
+  et délègue entièrement le wrap mode à l'état du sampler GPU, posé par le
+  générateur de shader hôte au moment du binding. Ça confirme que le
+  support de `mirror`/`constant` (par opposition à `clamp`/`periodic`, les
+  deux modes GPU quasi universels) dépend de ce que l'implémentation
+  MaterialX-vers-Hydra de Houdini/Karma câble réellement — pas garanti par
+  la spec elle-même. Cohérent avec l'observation de l'auteur (seuls
+  `clamp`/`periodic` fonctionnaient jusqu'ici).
+
+Implémenté dans `_USD_create_UV_texture` (`ShaderTree.py`) : reconstruit
+explicitement le calcul de `ND_tiledimage` (`ND_multiply_vector2` puis
+`ND_subtract_vector2`, même formule `texcoord*uvtiling - uvoffset` avec la
+compensation de pivot du Round 8 inchangée) en amont d'un `ND_image`, au
+lieu d'appeler `ND_tiledimage` directement. `uaddressmode`/`vaddressmode`
+posés depuis `usdWrapMode` (nouvel attribut, résolu par
+`normalize_uv_wrap_modes` dans `uv_wrap_modes.py` — `USD_WRAP_MODE_BY_TILE`
+réintroduite : `reset`→`constant`, `repeat`→`periodic`, `edge`→`clamp`,
+`mirror`→`mirror`, distincte de `USD_NATIVE_WRAP_MODE_BY_TILE` qui reste
+côté glPreview, `reset`→`"black"`, un token `UsdUVTexture`-spécifique
+invalide dans l'enum `ND_image`), laissés non posés (donc défaut
+`"periodic"` du nodedef) si le mode ne résout pas. `node_registry.py`/
+`tools/generate_node_registry.py` mis à jour :
+`ND_image_{float,color3,color4}`, `ND_multiply_vector2`,
+`ND_subtract_vector2` ajoutés ; `ND_tiledimage_*` retiré (plus utilisé
+nulle part). 4 tests ajoutés dans `tests/normalize/test_uv_wrap_modes.py`
+pour `usdWrapMode`, 107 tests toujours verts.
+
+**Pas encore testé dans Houdini au moment de l'écriture ci-dessus.**
+`uvRotation` reste porté par le chaînage à deux nœuds `ND_UsdTransform2d`
+(recenter/rotate), inchangé par ce round - voir Round 14 pour la
+documentation de ce mécanisme, ajouté hors session suivie avant ce round
+et jamais tracé ici jusqu'alors (pas "du Round 4", qui disait l'inverse).
+
+#### Round 11, test réel dans Houdini du Round 10 — TUILAGE CONFIRMÉ CORRECT, `mirror` CONFIRMÉ NON SUPPORTÉ PAR HOUDINI (2026-08-10)
+
+Testé par l'auteur dans Houdini juste après le Round 10 : **le calcul de
+tuilage reconstruit à la main (point a) ci-dessus) rend correctement** —
+la reconstruction `ND_multiply_vector2`/`ND_subtract_vector2` en amont de
+`ND_image` est équivalente en pratique, pas seulement algébriquement, à
+l'ancien `ND_tiledimage`.
+
+`mirror` (point b), en revanche, confirmé **non fonctionnel côté
+Houdini** — exactement le genre de manque prédit par l'analyse GLSL du
+Round 10 (le mode de wrap est délégué à l'état du sampler GPU posé par
+l'hôte, pas calculé dans le shader `ND_image` lui-même). Symptôme précis :
+la texture apparaît **transparente** sur les bords tuilés en mode mirror
+dans Houdini, alors que le même fichier rend `mirror` correctement dans
+Modo — donc bien un manque de l'implémentation MaterialX-vers-Hydra de
+Houdini, pas un problème dans le graphe généré par ce kit. `constant`
+(Modo "reset") reste à tester séparément, pas encore fait.
+
+Décision de l'auteur : **garder `uaddressmode`/`vaddressmode="mirror"`
+tel quel dans le graphe généré** (ne pas retomber sur `clamp` en
+substitution) — le graphe est correct vis-à-vis de la spec MaterialX, le
+bug est chez Houdini, pas la peine de le masquer en dégradant le graphe.
+À la place, un diagnostic explicite a été ajouté dans
+`_USD_create_UV_texture` (`ShaderTree.py`), déclenché quand `uaddressmode`
+ou `vaddressmode` résout à `"mirror"` :
+`_DEBUG_diag("Unsupported", "UV mapping", ...)` — même mécanisme que les
+autres limitations connues déjà signalées de cette façon (ex. projection
+triplanaire, effets sans équivalent glPreview).
+
+#### Round 12, regroupement des opérateurs UV dans un NodeGraph "UV_Transform" — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS HOUDINI (2026-08-10)
+
+Demande de l'auteur : les 5 nœuds impliqués dans la transformation UV côté
+mtlx (sélection d'UV map, recenter/rotate, tiling, offset - jusque là des
+prims frères sous le matériau, nommés par préfixe partagé) encombrent le
+graphe. Regroupés dans un unique prim `NodeGraph` nommé
+`<nom_de_la_couche>_UV_Transform`, avec les paramètres Modo-facing exposés
+comme ses propres interface inputs (`uvMap`/`rotation`/`tiling`/`offset`)
+plutôt que posés en dur sur chaque nœud interne — même convention
+d'authoring que `_USD_create_texture_adjust_nodegraph`, déjà en place et
+validée ailleurs dans ce fichier pour le post-traitement de texture
+(contrast/remap/invert). Purement structurel : les formules/le câblage
+interne sont inchangés, seul l'emplacement des prims change (nœuds
+imbriqués sous le `NodeGraph`, une seule boîte repliable dans l'éditeur de
+graphe de matériau d'un DCC, au lieu de 5 nœuds frères sous le matériau).
+
+`_USD_create_UV_texcoord_reader` et `_USD_create_UV_texture_transform`
+fusionnées dans une nouvelle fonction unique, `_USD_create_UV_transform`
+(`ShaderTree.py`) — plus utilisées/référencées nulle part ailleurs,
+supprimées plutôt que laissées en code mort. `_USD_create_UV_texture` ne
+construit plus les nœuds de tiling/offset elle-même (déplacés dans
+`_USD_create_UV_transform`) ; elle se contente de connecter son
+`"texcoord"` à la sortie unique du `NodeGraph`.
+
+Vérifié structurellement en construisant le graphe directement contre
+`usd-core` dans `.venv` (pas juste une relecture de texte) : les 5 nœuds
+apparaissent bien imbriqués sous le prim `NodeGraph`, ses interface inputs
+sont correctement référencés par les nœuds internes
+(`inputs:rotation.connect = .../UV_Transform.inputs:rotation`, etc.), et
+`ND_image` à l'extérieur ne référence que la sortie unique du graphe
+(`inputs:texcoord.connect = .../UV_Transform.outputs:out`). **Pas encore
+testé visuellement dans Houdini** — aucune raison de s'attendre à une
+différence de rendu (le calcul est strictement identique, seule
+l'organisation des prims change), mais pas confirmé.
+
+#### Round 13, `ND_geompropvalue_vector2` sorti du NodeGraph — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS HOUDINI (2026-08-10)
+
+Ajustement de l'auteur sur le Round 12 : le nœud de sélection d'UV map
+(`ND_geompropvalue_vector2`) ne doit pas être imbriqué dans le `NodeGraph`
+"UV_Transform", pour plus de cohérence — c'est une lecture de propriété
+géométrique (quelle UV map lire), pas un opérateur de *transformation* UV
+(recenter/rotate/tiling/offset), donc regroupés dans la même boîte ça
+brouille ce qu'elle représente. Redéplacé en prim frère du `NodeGraph`
+(`<couche>_uvmap`, comme avant le Round 12), avec sa valeur `geomprop`
+reposée en dur (`.Set(uvMapName)`) plutôt que via l'interface input
+`uvMap` du graphe (supprimée - elle n'avait plus de raison d'être une fois
+le nœud qui la consommait sorti). Le nœud interne `recenter` (toujours
+dans le graphe) connecte directement son `"in"` à ce nœud externe -
+traverser la frontière du `NodeGraph` par une connexion directe est
+parfaitement valide en USD (l'encapsulation n'est pas imposée), et c'est
+exactement le même genre de connexion que celle vue plus haut entre
+`ND_image` et la sortie du graphe. Vérifié structurellement contre
+`usd-core` : `rainbowh_Image_2_uvmap` apparaît bien en frère de
+`rainbowh_Image_2_UV_Transform`, et `recenter.inputs:in.connect` pointe
+correctement dessus à travers la frontière du graphe. Reste, comme le
+Round 12, à confirmer visuellement dans Houdini (aucun changement de
+calcul, seulement d'emplacement de prim).
+
+#### Round 14, `uvRotation` routé via l'interface input du NodeGraph + nettoyage des commentaires (2026-08-10)
+
+Deux choses dans cette session :
+
+**1. Correction du Round 13** : le nœud `recenter` (interne au `NodeGraph`)
+connectait son `"in"` directement au nœud externe `ND_geompropvalue_vector2`,
+traversant la frontière du graphe sans passer par une interface input —
+valide en USD mais incohérent avec la convention déjà établie dans ce
+fichier (`_USD_create_texture_adjust_nodegraph` route toute donnée entrante
+via une interface input, jamais par connexion directe à un nœud interne).
+Corrigé : le `NodeGraph` expose maintenant sa propre interface input
+`"texcoord"` (vector2, non connectée par défaut) ; `ND_geompropvalue_vector2`
+(resté en dehors du graphe, Round 13 inchangé sur ce point) connecte sa
+sortie sur cette interface input, et `recenter` lit `"texcoord"` comme il
+lit déjà `"rotation"`/`"tiling"`/`"offset"`. Quand `uvMap` est vide,
+l'interface input reste simplement créée sans connexion ni valeur — même
+effet en aval (aucune valeur ne se propage) que l'ancien "laisser `"in"`
+totalement non connecté". Vérifié structurellement contre `usd-core` :
+`inputs:texcoord.connect` sur le `NodeGraph` pointe vers le nœud externe,
+et `recenter.inputs:in.connect` pointe vers cette interface input, pas
+vers le nœud externe directement.
+
+**2. Comblement d'un trou de documentation** : en simplifiant les
+commentaires de `_USD_create_UV_transform`/`_USD_create_UV_texture` (à la
+demande de l'auteur, voir point 3), il est apparu que le mécanisme de
+rotation à pivot centré (deux nœuds `ND_UsdTransform2d` chaînés,
+recenter → rotate → recenter inverse) n'avait **jamais été documenté
+comme son propre round** dans ce fichier — seul le code le racontait. Le
+Round 4 dit explicitement l'inverse ("plus aucun mécanisme ne porte
+`uvRotation` côté mtlx"), et le Round 12 le mentionne en passant
+("`uvRotation` reste porté par le chaînage `ND_UsdTransform2d` du
+Round 4" — attribution erronée, ce chaînage n'existe pas au Round 4). Le
+mécanisme a donc été ajouté entre le Round 9 et le Round 10, hors session
+suivie, comme le retrait de `ND_image` déjà rencontré avant le Round 10.
+Pour mémoire, la logique (inchangée, seulement redocumentée ici) :
+`ND_UsdTransform2d` (le vrai nodedef MaterialX-wrapped, vérifié contre la
+librairie standard — le schéma natif `"UsdTransform2d"` ne se résout pas
+comme nœud dans un graphe mtlx compilé dans Karma, même échec que
+`UsdPrimvarReader_float2`) tourne toujours autour de l'origine UV (0,0),
+et sa propre `"translation"` s'applique *après* la rotation — donc un seul
+nœud ne peut pas fournir le décalage pré-rotation qu'un pivot centré
+demande. Modo pivote `uvRotation` depuis le centre de la tuile (0.5,0.5),
+confirmé par l'auteur. Chaîner un recentrage (-0.5,-0.5) → rotation →
+recentrage inverse (+0.5,+0.5) reproduit ça : à `uvRotation=0` les deux
+recentrages s'annulent exactement, donc no-op pour le cas (très courant)
+sans rotation. `m02`/`m12` reste hors de cette chaîne (posé sur le nœud
+`"offset"` à la place, *après* le multiply de tiling — voir Round 8) ;
+`"scale"` reste à son défaut (1,1) sur les deux nœuds puisque le tiling
+est le travail du nœud `"tiling"`, pas de celui-ci.
+
+**3. Simplification des commentaires** (demande explicite de l'auteur) :
+les longs commentaires narratifs de `_USD_create_UV_transform`/
+`_USD_create_UV_texture` (répétant l'historique déjà couvert ici) ont été
+réduits à une ligne pointant vers le round CLAUDE.md correspondant. Rien
+n'a été perdu — chaque fait qui n'était encore documenté nulle part
+ailleurs (le mécanisme du point 2 ci-dessus) a été migré ici avant d'être
+raccourci dans le code.
+
+#### Round 15, direction de `m02`/`m12` inversée par rapport à Modo — CONFIRMÉ DANS HOUDINI (2026-08-10)
+
+L'auteur signale, tiling actif (`wrapU`/`wrapV` ≠ 1), que le pan (offset)
+part dans la direction opposée à Modo. Proposition initiale de l'auteur :
+inverser le signe du terme de recentrage `0.5*(wrapU-1)` lui-même
+(`uvoffsetU = m02 - 0.5*(wrapU-1)` au lieu de `+`). Écartée après analyse :
+ce terme est exactement celui validé empiriquement dans Houdini au
+Round 8 (alignement de tuilage correct avec `wrapU`/`wrapV` ≠ 1, sans pan
+`m02`/`m12` impliqué à ce moment-là) — l'inverser risquait de réintroduire
+ce bug déjà corrigé, tout en ne changeant *rien* au cas le plus courant
+(tiling par défaut, `wrapU=wrapV=1`) où ce terme vaut exactement zéro quel
+que soit son signe.
+
+Correction appliquée à la place, plus ciblée : seul le signe de
+`m02`/`m12` est inversé, le terme de recentrage du Round 8 reste
+intact :
+
+```python
+uvoffsetU = -m02 + 0.5 * (wrapU - 1.0)
+uvoffsetV = -m12 + 0.5 * (wrapV - 1.0)
+```
+
+Cohérent avec le fait que le terme de recentrage a déjà été validé
+indépendamment (sans pan) — si l'alignement de tuilage était correct sans
+pan et devient faux uniquement quand un pan `m02`/`m12` non nul s'ajoute,
+c'est `m02`/`m12` qui a le mauvais signe, pas le terme de recentrage.
+
+**Confirmé par l'auteur après re-export/test dans Houdini** : toutes les
+transformations UV (sélection d'UV map, rotation à pivot centré, tuilage,
+pan) fonctionnent maintenant correctement — clôt la série de rounds
+9-15 sur ce sujet.
+
+#### Round 16, nettoyage final des commentaires "what vs why" (2026-08-10)
+
+Demande de l'auteur, une fois le Round 15 confirmé : dans
+`_USD_create_UV_transform`/`_USD_create_UV_texture`, les commentaires ne
+doivent plus décrire que **ce que** fait chaque bloc (une ligne, factuel),
+pas **comment**/**pourquoi** — cette rationale vit entièrement dans ce
+fichier (Round 3, 4, 7, 8, 10, 11, 13, 14, 15) et n'a pas besoin d'être
+dupliquée dans le code. Rien à migrer : tout ce qui restait dans les
+commentaires "why" avant ce round était déjà couvert par un round
+existant, donc trim pur, aucune information nouvelle perdue.
+
+L'auteur a ensuite repris cette passe directement dans le code (un
+commentaire "quoi" en une ligne par bloc dans `_USD_create_UV_transform` :
+sélection d'UV map, création du `NodeGraph`, lecture des channels Modo,
+tiling-pivot pan offset, interface inputs, recenter/rotate/tiling/offset,
+sortie finale) — même intention que ci-dessus, rien à contester. Seul fait
+nouveau qui en ressort et qui ne vivait encore nulle part dans ce fichier :
+**`m02`/`m12` proviennent de la matrice de transform 3x3 du
+`txtrLocator`** de Modo (convention `mRC` = ligne R, colonne C ; `m02`/
+`m12` sont donc les termes de translation des lignes 0/1) — explique
+l'origine du nommage des deux channels, jusqu'ici jamais explicitée dans
+ce fichier (seule leur valeur/usage l'était, voir Round 2 et 8).
+
+#### Round 17, `"constant"` (Modo "reset") confirmé non supporté par Houdini — CONFIRMÉ, MÊME LIMITATION QUE `mirror` (2026-08-10)
+
+Dernier point ouvert de la section "PRIORITAIRE" : testé par l'auteur dans
+Houdini, `uaddressmode`/`vaddressmode="constant"` (résolu depuis le tile
+mode Modo `"reset"`) affiche les bords hors tuile en **noir pur**, alors
+que Modo les affiche en **transparent**. Exactement le même symptôme de
+fond que `mirror` au Round 11 : le graphe généré est correct vis-à-vis de
+la spec MaterialX (`constant` est une valeur valide de l'enum
+`uaddressmode`/`vaddressmode`, vérifié Round 10), mais l'implémentation
+MaterialX-vers-Hydra de Houdini ne le respecte pas — cohérent avec
+l'analyse GLSL du Round 10 (le wrap mode est délégué à l'état du sampler
+GPU posé par l'hôte, pas calculé dans le nœud `ND_image` lui-même;
+`clamp`/`periodic` sont les deux modes GPU quasi universels, `mirror`/
+`constant` beaucoup moins souvent câblés correctement par les
+intégrations tierces).
+
+Même décision que pour `mirror` : le graphe reste tel quel (pas de
+repli sur `clamp`), avec un diagnostic explicite au lieu d'une correction
+silencieuse. Ajouté dans `_USD_create_UV_texture` (`ShaderTree.py`), même
+mécanisme que le `mirror` du Round 11 :
+`_DEBUG_diag("Unsupported", "UV_mapping", ...)` déclenché quand
+`uaddressmode`/`vaddressmode` résout à `"constant"`.
+
+Ferme le dernier point ouvert de la section "PRIORITAIRE" en tête de
+fichier sur le sujet des wrap modes mtlx — les 4 valeurs de l'enum
+(`periodic`/`clamp`/`mirror`/`constant`) sont maintenant toutes testées
+dans Houdini : `periodic`/`clamp` fonctionnent, `mirror`/`constant` sont
+des limitations Houdini connues et diagnostiquées.
+
+#### Round 18, sélection d'UV map ajoutée au réseau glPreview — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS HOUDINI (2026-08-10)
+
+Discussion sur une possible fusion des deux réseaux (mtlx et glPreview) :
+l'auteur propose de câbler `_UV_Transform:out` (le `NodeGraph` mtlx complet
+— sélection d'UV map, rotation, tuilage, offset) directement sur
+`UsdUVTexture:st`, et de réutiliser `_USD_create_texture_adjust_nodegraph`
+(post-traitement mtlx : contrast/remap/invert/brightness) pour le
+post-traitement preview. Écarté après analyse : les deux graphes sont
+construits entièrement à partir de nœuds `ND_`-préfixés (`ND_UsdTransform2d`,
+`ND_multiply_vector2`, `ND_remap`, `ND_contrast`...), hors du vocabulaire
+natif figé que Storm sait résoudre pour son réseau `UsdPreviewSurface`
+(`UsdUVTexture`/`UsdPrimvarReader_float2`/`UsdTransform2d` **natif**, sans
+aucun nœud de math générique — confirmé par la section "Limites connues"
+ci-dessous, où `contrast`/le remap min/max sont déjà documentés comme sans
+équivalent natif pour cette raison précise). Réutiliser ces graphes pour
+`UsdPreviewSurface` risquait donc de reproduire la même classe de bug que
+le "blanc" originel (voir section "Shader glPreview"), déplacée du calcul
+de couleur vers le calcul d'UV/post-traitement.
+
+**Décision de l'auteur** : seul Karma compte pour lui (il ne sait pas/ne
+veut pas tester Storm/autres DCCs), et Karma sait déjà inférer son propre
+shader de preview directement depuis le graphe `standard_surface` (mtlx) -
+observation cohérente avec la note "Contexte important" en tête de ce
+fichier et le comportement déjà noté pour `ND_tiledimage`. Le réseau
+`UsdPreviewSurface` explicite compte donc peu pour le rendu réel vu par
+l'auteur ; pas la peine d'investir dans la fusion proposée. Seule
+correction retenue, plus restreinte : câbler la sélection d'UV map
+(`ND_geompropvalue_vector2`, sans aucun nœud de math) sur `UsdUVTexture:st`
+- un simple lookup de propriété géométrique, pas une évaluation de graphe
+de nœuds de calcul, donc un risque bien plus limité que la fusion complète, même si
+`ND_geompropvalue_vector2` reste techniquement hors du vocabulaire natif
+figé de Storm.
+
+Implémenté dans `_USD_create_preview_texture_output` (`ShaderTree.py`) :
+construit un second nœud `ND_geompropvalue_vector2` (`<couche>_preview_uvmap`,
+distinct de celui du réseau mtlx - le réseau glPreview reste entièrement
+autonome/dupliqué, comme le reste de son architecture) quand `uvMap` est
+renseigné, et le passe à `_USD_create_preview_UV_texture` comme
+`textureTransformInput` (paramètre déjà existant depuis le Round 5, mais
+jusqu'ici toujours appelé avec `None`) - connecté sur `UsdUVTexture:st`
+via la logique déjà en place. `None` (donc `"st"` non connecté) reste le
+comportement si `uvMap` est vide - le cas le plus courant, inchangé.
+Vérifié structurellement contre `usd-core`. **Pas encore testé dans
+Houdini.**
+
+#### Round 19, simplification du système de colorspace — table de mapping directe, système à 4 préférences retiré (2026-08-10)
+
+En discutant d'un bug séparé (glPreview force `"raw"` pour les normal maps,
+pas le graphe mtlx — jamais réellement creusé plus loin ce round), l'auteur
+demande d'explorer `/Applications/.../Modo*.app/Contents/Resources/ocio_configs/`
+pour voir si les `make.py`/`makeconfig_anim.py`/`make_vfx_ocio.py` de chaque
+config pourraient aider à construire "une table de mapping colorspace
+solide". Ces scripts se sont révélés être les générateurs Python 2 du
+projet OCIO amont lui-même (`import PyOpenColorIO`, chemins dev codés en
+dur) — pas exécutés par Modo, pas utilisables tels quels. En revanche,
+lire directement les 6 `config.ocio` a révélé un fait solide et nouveau :
+chaque config déclare un rôle `roles: data: <nom>` (la colorspace destinée
+aux données non-couleur - normales, points... - confirmé par la
+description "Raw Data. Used for normals, points, etc." partagée par tous)
+— et ce nom **n'est pas toujours `"raw"`** : `Foundry-WideGamut` n'a même
+aucune colorspace nommée `"raw"`, son rôle `data` pointe vers `"linear"` ;
+`spi-anim`/`spi-vfx` (déjà notés Round 7 sans nomenclature `raw`/`sRGB`)
+pointent vers `"ncf"`. Une piste (table `OCIO_DATA_COLORSPACE_BY_CONFIG`
+par config, en plus de retenir le nom de la config active) a été explorée
+en discussion mais **pas retenue** — l'auteur a recadré l'objectif entre
+temps.
+
+**Recadrage de l'auteur** : le vrai besoin n'est pas de reproduire la
+config OCIO active de Modo, c'est simplement de remplir la métadonnée
+`colorSpace` d'`ND_image` avec une valeur que MaterialX/le renderer en
+face (Houdini/Karma) reconnaît réellement - une table directe
+`valeur-choisie-dans-Modo -> valeur-acceptée-côté-USD`, construite et
+affinée empiriquement plutôt que dérivée des configs OCIO de Modo (qui
+décrivent ce que *Modo* appelle chaque colorspace, pas ce que *Houdini*
+en face reconnaît). Décision explicite de l'auteur en le demandant : ceci
+**réintroduit et remplace** le système à 4 préférences du Round 7 (`"(default)"`
+résolu via `colormanagement.<catégorie>_default_colorspace`) plutôt que de
+coexister avec lui — `"(default)"` devient une simple entrée de plus dans
+la nouvelle table, mappée sur `""` (aucune métadonnée `colorSpace` posée
+du tout, laissé au renderer/à mtlx de décider), au lieu d'être résolu.
+
+Implémenté :
+- **`normalize/colorspace.py`** entièrement réécrit : `MODO_COLORSPACE_TO_USD`,
+  une seule table `{valeur brute Modo: valeur usd}`, avec pour l'instant
+  une seule entrée confirmée par l'auteur (`"(default)"` → `""`) - le reste
+  passe tel quel (valeur Modo inchangée) en attendant d'autres entrées
+  confirmées (voir Round 20, juste après, pour la suite). `normalize_colorspace(xml)`
+  n'a plus de paramètre - retrouve la signature uniforme `xml -> xml` des
+  5 autres passes, et rejoint `NORMALIZATION_PASSES` dans
+  `normalize/__init__.py` (n'a plus besoin d'être appelée à part). Toute
+  la logique du Round 7 (`MODO_FORMAT_COLORSPACE_CATEGORY`,
+  `MODO_DEFAULT_COLORSPACE`, `USD_RAW_COLORSPACE`) supprimée, pas laissée
+  en code mort.
+- **`ShaderTree.py`** : `colorspaceDefaultByCategory`/
+  `_initialize_colormanagement_defaults()` (l'appel `lx.eval()` du
+  Round 7, Stage 1) supprimés entièrement - plus besoin de requêter les 4
+  préférences Modo. `normalize_shadertree(xml_shadertree)` appelée sans
+  second argument.
+- `tests/normalize/test_colorspace.py` réécrit pour la nouvelle API (plus
+  de `colorspaceDefaultByCategory` en paramètre de test) - 106 tests
+  toujours verts (107 → 106, quelques tests Round 7 devenus sans objet
+  consolidés plutôt que remplacés un-pour-un).
+
+**Ce que ça ne couvre pas** : le bug d'origine de la discussion (mtlx ne
+force pas `"raw"`/l'équivalent pour les normal maps, contrairement à
+glPreview) reste ouvert, non traité ce round - la conversation a bifurqué
+vers cette simplification avant d'y revenir. La table
+`MODO_COLORSPACE_TO_USD` n'a qu'une entrée confirmée à la fin de ce round
+(`"(default)"`) ; le reste passe tel quel - voir Round 20, juste après,
+pour l'avoir étoffée.
+
+#### Round 20, table `MODO_COLORSPACE_TO_USD` étoffée avec le vocabulaire réel du CMS mtlx (2026-08-10)
+
+Suite du Round 19 : l'auteur demande d'extraire tous les `name:` du bloc
+`colorspaces:` de `foundry-v1/config.ocio` (13 colorspaces : `linear`,
+`sRGB`, `sRGBf`, `AdobeRGB`, `ProPhoto`, `rec709`, `Cineon`, `Gamma1.8`,
+`Gamma2.2`, `AlexaV3LogC`, `PLogLin`, `SLog`, `raw`) comme candidats côté
+Modo pour la table, puis de leur trouver un équivalent mtlx.
+
+Plutôt que de deviner, vérifié directement contre le vrai `cmlib` de la
+librairie standard MaterialX (`cmlib_defs.mtlx`, livré avec le paquet
+`MaterialX` standalone dans `.venv`) : le `DefaultColorManagementSystem`
+de mtlx n'a de nœud de conversion réel (`ND_<nom>_to_lin_rec709_color3/4`)
+que pour un vocabulaire fixe et restreint : `acescg`, `adobergb`,
+`g18_rec709`, `g22_ap1`, `g22_rec709`, `lin_adobergb`, `lin_displayp3`,
+`lin_rec709` (l'espace de référence lui-même), `rec709_display`,
+`srgb_texture`, `srgb_displayp3`. Toute valeur `colorSpace` posée sur
+`ND_image` en dehors de cette liste n'a donc structurellement aucune
+chance d'être reconnue par le CMS par défaut de mtlx, quel que soit ce que
+Houdini/Karma utilise par ailleurs.
+
+Table complétée en croisant les 13 noms Modo contre ce vocabulaire (par
+nom et par description du `.ocio`, pas par supposition) :
+
+```python
+MODO_COLORSPACE_TO_USD = {
+    "(default)": "",
+    "linear": "lin_rec709",
+    "sRGB": "srgb_texture",
+    "sRGBf": "srgb_texture",       # même courbe que sRGB, juste plage flottante étendue - pas de variante mtlx dédiée
+    "rec709": "rec709_display",
+    "Gamma1.8": "g18_rec709",      # suppose les primaires Rec709 (seule variante Gamma1.8 de mtlx)
+    "Gamma2.2": "g22_rec709",      # idem, pas la variante ACES-AP1 (g22_ap1)
+    "AdobeRGB": "adobergb",        # suppose la version gamma-encodée, pas lin_adobergb
+    "raw": "raw",                  # pas une transformation CMS - le token standard "pas de gestion couleur"
+    "ProPhoto": "",
+    "Cineon": "",
+    "AlexaV3LogC": "",
+    "PLogLin": "",
+    "SLog": "",
+}
+```
+
+**Correction au passage** : l'exemple `"linear"` → `"Linear Displayp3"`
+donné par l'auteur en tête de cette discussion (Round 19) ne correspond à
+rien dans le vocabulaire mtlx réel - remplacé par `"lin_rec709"` sur
+confirmation explicite de l'auteur, qui a confirmé qu'il s'agissait d'un
+exemple illustratif, pas d'une valeur testée en dur dans Houdini.
+
+**Décision de l'auteur pour les 5 valeurs sans équivalent** (`ProPhoto`
+et les 4 courbes log `Cineon`/`AlexaV3LogC`/`PLogLin`/`SLog`) : mappées
+sur `""` (pas de métadonnée `colorSpace` posée du tout) plutôt que
+laissées passer telles quelles - un nom que mtlx ne reconnaît de toute
+façon pas ne vaut pas mieux qu'aucune métadonnée.
+
+`tests/normalize/test_colorspace.py` étendu en conséquence (paramétré sur
+les 8 entrées confirmées + les 5 sans équivalent) - 116 tests toujours
+verts. **Portée limitée à `foundry-v1`** (la config par défaut de Modo) -
+les valeurs propres aux 5 autres configs (`aces`, `Foundry-WideGamut`,
+`nuke-default`, `spi-anim`, `spi-vfx`) ne sont pas dans cette table (voir
+Round 21, juste après, pour ce qui leur arrive maintenant). **Pas encore
+testé dans Houdini** - ces 8 mappings sont dérivés du vrai code source
+mtlx, pas observés en rendu.
+
+#### Round 21, repli uniforme sur `""` + diagnostic pour les colorspaces sans équivalent (2026-08-10)
+
+L'auteur retire lui-même les 5 entrées `"": ""` du Round 20 (`ProPhoto`,
+`Cineon`, `AlexaV3LogC`, `PLogLin`, `SLog`) de `MODO_COLORSPACE_TO_USD`,
+et demande que le repli (toute valeur absente de la table, plus large que
+ces 5-là - couvre aussi les 5 configs OCIO de Modo jamais mappées) devienne
+`usdColorSpace=""` de façon générale, avec un diagnostic
+`_DEBUG_diag("Unsupported", "Color_Management", ...)` à chaque fois que ça
+se produit.
+
+`_normalize_colorspace_channel` (`normalize/colorspace.py`) simplifiée en
+conséquence : `MODO_COLORSPACE_TO_USD.get(colorspace, "")` - un seul
+repli, qu'une valeur soit explicitement absente de la table (cas des 5
+retirées, ou de toute config autre que `foundry-v1`) ou qu'elle soit
+`"(default)"` (déjà `""` explicitement dans la table, Round 19).
+
+**Le diagnostic lui-même ne peut pas vivre dans `normalize/colorspace.py`** -
+`_DEBUG_diag` est définie dans `ShaderTree.py`, qui fait `import lx, modo`
+en tête de fichier ; l'appeler depuis `normalize/` casserait la
+testabilité pytest sans Modo de tout le package (l'invariant "zéro
+dépendance lx/modo/fnpxr" documenté en tête de chaque passe). Précédent
+déjà en place pour ce genre de cas : `normalize_projection_defaults`
+résout `usdProjType` silencieusement, et c'est `_USD_create_texture_output`
+(`ShaderTree.py`) qui compare `usdProjType != projType` et diagnostique -
+le calcul reste dans `normalize/`, le diagnostic reste dans `ShaderTree.py`.
+Même découpage appliqué ici : `normalize_colorspace` reste
+diagnostic-free, et `_DEBUG_diag` est appelé directement (pas de fonction
+utilitaire dédiée - demande explicite de l'auteur, plus simple qu'un
+`_UTIL_diag_colorspace_fallback` séparé) aux deux points de consommation
+de `usdColorSpace` dans `ShaderTree.py` : `_USD_create_UV_texture` (mtlx)
+et `_USD_create_preview_UV_texture` (glPreview - au Round 21, uniquement
+dans la branche `else`, `isNormal` forçant encore `'raw'` sans jamais lire
+`usdColorSpace` ; ce forçage a depuis été retiré, voir Round 22
+juste après).
+
+**Effet secondaire accepté, pas un bug** : le diagnostic se déclenche
+aussi pour `"(default)"`, qui résout légitimement sur `""` depuis le
+Round 19 (pas d'entrée manquante, un choix délibéré). Pas de distinction
+faite entre les deux cas - le message ("Colorspace (default) has no mtlx
+equivalent...") est légèrement imprécis pour ce cas précis, mais
+c'est le comportement demandé : plus simple qu'un test à part pour
+exclure `"(default)"`, et voir ce diagnostic pour `"(default)"` reste une
+information correcte (aucune métadonnée `colorSpace` n'est effectivement
+posée). 116 tests toujours verts (aucun test ne dépend de `ShaderTree.py`,
+qui n'est pas exécutable hors Modo - le comportement du diagnostic
+lui-même reste donc non testé par pytest, comme tout `_DEBUG_diag`).
+
+#### Round 22, forçage `"raw"`/`sourceColorSpace` retiré du réseau glPreview, mtlx et glPreview alignés (2026-08-10)
+
+L'auteur demande de retirer, côté glPreview (`_USD_create_preview_UV_texture`)
+**et** côté mtlx (`_USD_create_UV_texture`), tout ce qui teste
+spécifiquement "normal" ou "sRGB" dans la résolution de colorspace, pour
+ne garder que l'évaluation générique déjà posée au Round 21 :
+
+```python
+colorspaceChannel = xml.find('videoStill/channels/colorspace')
+usdColorSpace = colorspaceChannel.get('usdColorSpace') if colorspaceChannel != None else None
+if colorspaceChannel != None and not usdColorSpace:
+    _DEBUG_diag("Unsupported", "Color_Management", f"Colorspace {colorspaceChannel.get('value')} has no mtlx equivalent, switching to default (empty value)")
+if usdColorSpace:
+    fileInput.GetAttr().SetColorSpace(usdColorSpace)
+```
+
+Concrètement, côté glPreview : le branchement `if isNormal: usdColorSpace
+= 'raw' else: ...` (qui forçait `raw` pour les couches bump/normal,
+introduit avant le Round 7) supprimé - la résolution de colorspace passe
+maintenant toujours par le chemin générique, sans distinction d'effet. Le
+bloc `sourceColorSpace` (`UsdUVTexture.inputs:sourceColorSpace`, l'enum
+`raw`/`sRGB`/`auto` calculé à partir de `usdColorSpace`) supprimé
+entièrement - plus jamais posé sur le nœud `UsdUVTexture`, quel que soit
+l'effet. Seule la métadonnée `colorSpace` sur `"file"` reste câblée,
+maintenant identique aux deux endroits. `isNormal` (variable) reste
+utilisée ailleurs dans la fonction (unpacking scale/bias pour les normal
+maps 8-bit, sans rapport avec la colorspace) - non touchée.
+
+**Ce round ne traite volontairement pas le bug d'origine** qui a lancé
+toute cette série (mtlx ne force pas `raw`/l'équivalent pour les normal
+maps, glPreview le faisait avant ce round mais plus maintenant) - les deux
+réseaux traitent maintenant les couches bump/normal exactement comme
+n'importe quelle autre couche pour la colorspace, en attendant. Noté
+explicitement par l'auteur comme un compromis temporaire : **à
+retraiter dans une session future** (voir "Prochaines étapes possibles"
+en fin de fichier) - décider comment forcer `raw`/l'équivalent mtlx pour
+bump/normal des deux côtés à la fois, probablement dans
+`normalize/colorspace.py` (qui connaît déjà `usdInputName`/
+`usdPreviewInputName` via `normalize_effect_channel_names`, exécutée
+avant elle dans `NORMALIZATION_PASSES`) plutôt que dupliqué dans
+`ShaderTree.py`. 116 tests toujours verts (aucun test ne couvre ce
+chemin, `ShaderTree.py` non exécutable hors Modo).
+
+#### Round 23, préfixe `"<config OCIO>:"` retiré avant lookup dans la table — CONFIRMÉ PAR L'AUTEUR (2026-08-10)
+
+En regardant un vrai export (`PF_ShaderBall_base_normalized.xml`),
+l'auteur ajoute une variable globale `ocioConfig` dans
+`export_basic_execute` (`ocioConfig = scene.sceneItem.channel("ocioConfig").get()`,
+`ShaderTree.py` ~ligne 161) et remarque que
+`imageMap/videoStill/channels/colorspace/@value`, pour un choix explicite,
+est toujours préfixé par le nom de la config OCIO active suivi de `":"` -
+ex. `"nuke-default:sRGB"` - exactement la même forme
+`"<config>:<colorspace>"` déjà rencontrée au Round 7 pour les 4
+préférences `pref.value colormanagement.*_default_colorspace`. Sans ce
+retrait, `MODO_COLORSPACE_TO_USD.get("nuke-default:sRGB")` ne matchait
+jamais rien (clés de la table = noms bruts, sans préfixe) et retombait
+silencieusement sur `""` avec le diagnostic du Round 21/22 - un faux
+"pas d'équivalent mtlx" alors que `sRGB` est bien dans la table.
+
+Corrigé dans `_normalize_colorspace_channel` (`normalize/colorspace.py`) :
+tout ce qui précède le premier `":"` est retiré avant le lookup
+(`colorspace.split(":", 1)[1]` si un `":"` est présent). Fait exprès
+**sans** threader `ocioConfig` en paramètre de `normalize_colorspace` -
+retirer un préfixe ne demande pas de connaître le nom de la config, juste
+de savoir qu'il y a un `":"` ; garde la passe uniforme/sans argument du
+Round 19. La valeur brute (`value`, avec son préfixe) reste inchangée,
+seul `usdColorSpace` (calculé) est affecté.
+
+**Deux valeurs sentinelles jusqu'ici inconnues, repérées dans ce même
+export réel** : `"(none)"` et `"auto"`, ni l'une ni l'autre préfixées,
+aux côtés de `"(default)"`/des valeurs explicites déjà connues. Pas
+encore d'entrée dédiée dans `MODO_COLORSPACE_TO_USD` - retombent sur `""`
+via le repli générique du Round 21 (diagnostiquées comme "pas
+d'équivalent mtlx", ce qui est un peu trompeur pour ces deux-là aussi -
+même nature que `"(default)"`, ce sont probablement des sentinelles
+légitimes, pas des noms de colorspace réels). Sens exact de `"(none)"`
+et `"auto"` pas encore investigué - à faire si ça devient gênant.
+
+**Autre chose repérée en passant, pas traitée ce round** : la config OCIO
+active sur ce fichier de test réel est `nuke-default`, pas `foundry-v1`
+(celle utilisée pour dériver `MODO_COLORSPACE_TO_USD` au Round 20) - les
+deux configs partagent la plupart des noms de colorspace concernés ici
+(`sRGB`, `linear`...) donc la table reste correcte pour ce cas précis,
+mais rien ne garantit que ce soit vrai pour toutes les entrées ou pour
+les 4 autres configs jamais vérifiées (`aces`/`Foundry-WideGamut`/
+`spi-anim`/`spi-vfx`).
+
+`ocioConfig` (variable globale ajoutée par l'auteur) n'est pour l'instant
+utilisée nulle part - le retrait de préfixe n'en a pas eu besoin. Garde sa
+raison d'être si une table par-config devient nécessaire plus tard (voir
+le point ci-dessus). Tests étendus dans `test_colorspace.py` (préfixe
+retiré avant lookup, sentinelles sans préfixe laissées telles quelles) -
+122 tests toujours verts.
+
+**Confirmé par l'auteur** : ça fonctionne (`"nuke-default:sRGB"` résout
+bien vers `"srgb_texture"` sur le fichier de test réel). Les points notés
+ci-dessus comme "pas encore investigués" (`"(none)"`/`"auto"`, couverture
+des 4 autres configs OCIO) restent ouverts, mais le retrait de préfixe
+lui-même est validé.
+
+#### Round 24, `LookupError: attribute 0 not found` sur le bouton d'export quand verbose est off — CORRIGÉ, CONFIRMÉ PAR L'AUTEUR (2026-08-10)
+
+Bug sans rapport avec la série colorspace, remonté par l'auteur en testant
+depuis le bouton d'export dans l'UI Modo : `LookupError`,
+`"attribute 0 not found"`, systématiquement quand `USDExport_verbose`
+**et** `USDExport_verboseModifyTree` sont tous les deux désactivés (jamais
+quand au moins l'un des deux est actif). Trace fournie par l'auteur :
+
+```
+|Python|...|Info| .. .../lxu/attributes.py: 118
+|Python|...|Info| .. .../lxu/attributes.py: 101
+|Python|...|Failed|Unhandled exception "LookupError"; attribute 0 not found.
+```
+
+Les deux frames pointent dans `lxu/attributes.py`, livré avec Modo lui-même
+(`Contents/Resources/python3kit/.../Scripts/lxu/attributes.py`) - pas du
+code de ce kit. "attribute 0" est un index, pas un nom - dans
+`Cmd_ExportShaderTree.__init__` (`Scripts/lxserv/ExportShaderTree.py`),
+`self.dyna_Add('item', '&item')` déclarait un unique argument dynamique
+optionnel (`self.basic_SetFlags(0, lx.symbol.fCMDARG_OPTIONAL)`, donc
+index 0 = `'item'`) - jamais lu nulle part (confirmé par grep sur tout le
+repo ; `export_basic_execute`'s propre docstring dit déjà "`Cmd_obj`: not
+used in this function"). Hypothèse (pas prouvée, `.venv` ne peut pas
+exécuter de code dépendant de Modo) : le mécanisme d'écho/log de commande
+interne de Modo tente de lire cet argument optionnel jamais assigné pour
+logger la commande, et échoue - les `print()` de `_DEBUG_diag` (actifs
+seulement quand verbose+verboseModifyTree sont tous les deux vrais)
+changeraient par effet de bord l'état interne du système de log de Modo
+d'une façon qui évite ce bug, expliquant pourquoi il ne se produit que
+quand les deux sont désactivés. Corrélation solide (confirmée par
+l'auteur : seulement quand les deux sont off), mécanisme exact non
+vérifié.
+
+Corrigé en supprimant les deux lignes (`dyna_Add`/`basic_SetFlags`) -
+argument mort, sa suppression ne peut rien casser côté fonctionnel
+puisqu'il n'était lu nulle part. **Confirmé par l'auteur : ne crashe plus**
+avec les deux flags désactivés - le vrai mécanisme interne de Modo qui
+causait le `LookupError` reste une hypothèse non vérifiée (`.venv` ne peut
+pas exécuter de code dépendant de Modo pour le confirmer autrement), mais
+le correctif fonctionne.
+
+#### Round 25, `_DEBUG_diag` : un flag verbose par catégorie au lieu de deux flags combinés — CONFIRMÉ PAR L'AUTEUR (2026-08-10)
+
+Suite du Round 24 : l'auteur redemande, indépendamment du bug corrigé,
+une vraie refonte du système de verbosité. Avant ce round,
+`_DEBUG_diag` n'avait que deux flags (`verbose`/`verboseModifyTree`,
+tous les deux requis pour imprimer quoi que ce soit) sans lien avec la
+catégorie du message (`sectionName`). L'auteur demande un flag dédié par
+catégorie de message, à la place :
+
+- `USDExport_verbose` renommé `USDExport_logValueChange`, ne gate plus
+  que `"SetValue"`.
+- `USDExport_verboseModifyTree` renommé `USDExport_logTreeChange`, gate
+  `"USD_Connect"`/`"USD_Create"`/`"USD_CreateShader"` (ce dernier renommé
+  depuis `"createUsdShader"` au Round 26, pour rester cohérent avec le
+  préfixe `USD_*` des deux autres).
+- Nouveau `USDExport_logFileManagement`, gate
+  `"Files"`/`"Renaming"`/`"Consolidate"` (ce dernier absorbe
+  `"copy_and_clean_files"` au Round 27, un doublon du même rôle).
+- Nouveau `USDExport_logUndefined`, gate `"Undefined"`/`"Unsupported"`.
+
+Ce découpage par catégorie couvre les 10 `sectionName` réellement utilisés
+dans `ShaderTree.py` (vérifié par grep sur tous les appels `_DEBUG_diag`
+avant d'implémenter, pas deviné) - `_DEBUG_diag` (`ShaderTree.py`)
+reconstruit maintenant, à chaque appel, un petit dict
+`logEnabledBySection` référençant directement les 4 globals (pas de
+lookup dynamique par nom de variable façon `globals()[...]`, essayé puis
+écarté - plus indirect que le reste du fichier, qui n'utilise
+métaprogrammation nulle part ailleurs) ; `logEnabledBySection.get(sectionName)`
+décide seul de l'impression console. L'écriture dans le XML diagnostic
+(`export_diagnostic`) reste inchangée, indépendante de ces 4 flags -
+seule la sortie console est concernée par ce découpage.
+
+`_initialize_preferences()` mis à jour (4 `lx.eval('user.value
+USDExport_log*  ?')` au lieu de 2) - les deux `print(f"verbose = ...")`
+de debug ajoutés par l'auteur pendant le diagnostic du Round 24 ont été
+retirés au passage (plus nécessaires, le bug étant résolu). Valeurs par
+défaut des 4 préférences (`Cmd_ExportShaderTree.__init__`,
+`ExportShaderTree.py`) : **toutes à `True`**, sur demande explicite de
+l'auteur (les anciens défauts, `verbose=False`/`verboseModifyTree=True`,
+n'ont pas été reconduits).
+
+`Configs/preferences.CFG` (section `ShaderTreeExport_eventLogOptions:sheet`)
+et `Configs/toolbar.cfg` (popup `SYB_USD_ShaderTreeExport_OutputOptions:sheet`,
+que l'auteur avait lui-même déjà étoffé avec les 2 anciens toggles entre
+deux rounds) mis à jour en parallèle : les 2 entrées existantes renommées,
+2 nouvelles ajoutées, mêmes labels/tooltips dans les deux fichiers pour
+rester cohérent. Choix de portée (pas demandé explicitement par
+l'auteur, jugement pris en écrivant ce round) : les 4 toggles sont
+présents dans les deux fichiers, pas seulement les 2 nouveaux - pour
+éviter que le popup toolbar et le panneau de préférences divergent sur
+lesquels des 4 sont exposés. Les deux XML validés (`ET.parse` en `.venv`,
+pas juste une relecture). 122 tests toujours verts (aucun test ne couvre
+`_DEBUG_diag`/les `.cfg`, tous dépendants de Modo ou hors du domaine de
+pytest). **Confirmé par l'auteur dans Modo : les 4 toggles fonctionnent.**
+
+#### Round 26, `"createUsdShader"` renommé `"USD_CreateShader"` (2026-08-10)
+
+Nettoyage mineur demandé par l'auteur en relisant le fichier diagnostic
+généré : `sectionName` mélangeait des styles de nommage
+(`"USD_Create"`/`"USD_Connect"` vs `"createUsdShader"`, casse et ordre des
+mots différents pour un rôle comparable). Renommé en `"USD_CreateShader"`
+pour rester cohérent avec le préfixe `USD_*` des deux autres - 3 sites
+dans `ShaderTree.py` (l'entrée `logEnabledBySection` de `_DEBUG_diag` et
+ses 2 points d'appel, création du shader preview et du shader mtlx). 122
+tests toujours verts (aucun test ne couvre ce nom directement).
+
+#### Round 27, `"copy_and_clean_files"` fusionné dans `"Consolidate"` (2026-08-10)
+
+Même genre de nettoyage que le Round 26 : `"copy_and_clean_files"`
+(2 sites, dans `_UTIL_copy_and_clean_files`) et `"Consolidate"` (3 sites,
+dans la fonction voisine qui copie/consolide les textures) couvraient le
+même rôle sous deux noms différents. Auteur : remplacer
+`"copy_and_clean_files"` par `"Consolidate"` partout, puis retirer
+l'entrée devenue redondante dans `logEnabledBySection`. Les deux noms
+gardaient de toute façon le même flag (`logFileManagement`), donc aucun
+changement de comportement - purement un nettoyage de nommage. 122 tests
+toujours verts.
+
 ### Limites connues, acceptées (pas d'équivalent natif dans le catalogue de preview de Storm)
 
 - **Projection triplanaire** : aucun nœud natif équivalent à
@@ -1099,6 +1846,13 @@ Le reste, aucune urgence, à discuter avec l'auteur :
    Vérifié en dry-run (3085 → 18 fichiers) puis en conditions réelles
    (`.lpk` de 54 Ko généré, `index.xml` régénéré correctement). Corrigé au
    passage : `index.xml` était dupliqué dans l'archive.
+6. **Colorspace des couches bump/normal** (laissé de côté au Round 22,
+   compromis temporaire explicite) : forcer `raw`/l'équivalent mtlx
+   (`OCIO_DATA_COLORSPACE_BY_CONFIG`-style ou plus simple, à revoir) pour
+   ces couches, côté mtlx **et** glPreview à la fois - idéalement dans
+   `normalize/colorspace.py` (qui a déjà accès à `usdInputName`/
+   `usdPreviewInputName` via `normalize_effect_channel_names`, exécutée
+   avant elle) plutôt que dupliqué dans `ShaderTree.py`.
 
 Ne pas réintroduire de logique de cas particulier dans la construction USD —
 c'est précisément ce que cette refonte cherchait à éviter.
