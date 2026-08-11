@@ -267,7 +267,10 @@ def _XML_export_item(item:modo.Item):
     # but are not directly referenced inside the shader tree item list
     # they are connected through the itemGraph like dependencies
     #-------------------------------------------------------
-    if item.type in [lx.symbol.sITYPE_IMAGEMAP, lx.symbol.sITYPE_NOISE, lx.symbol.sITYPE_CELLULAR, lx.symbol.sITYPE_FALLOFF]:
+    #---------------------------------------------------- sITYPE_GRADIENT assumed to exist/match "gradient"
+    #---------------------------------------------------- by convention (unverified against a real Modo
+    #---------------------------------------------------- symbol table) - see CLAUDE.md Round 38.
+    if item.type in [lx.symbol.sITYPE_IMAGEMAP, lx.symbol.sITYPE_NOISE, lx.symbol.sITYPE_CELLULAR, lx.symbol.sITYPE_FALLOFF, lx.symbol.sITYPE_GRADIENT]:
         graph = item.itemGraph(lx.symbol.sGRAPH_SHADELOC)
     
         fwdItem:modo.Item
@@ -320,7 +323,24 @@ def _XML_get_channels(item:modo.Item):
             
             for attName in channelsDict[chName]:
                 att = channelsDict[chName][attName]
-                if type(att) is dict: # --------------------------- if channel has been stored as dict (structure)
+                if type(att) is list: # ---------------------------- gradient keys: one <Key> child per entry
+                    for keyAttrs in att:
+                        keyEl = ET.Element('Key')
+                        for keyAttName in keyAttrs:
+                            keyEl.set(keyAttName, keyAttrs[keyAttName])
+                        xmlChan.append(keyEl)
+                elif type(att) is dict and att and all(type(v) is list for v in att.values()):
+                    #---------------------------------------------------- Grouped gradient keys (e.g. color: red/green/blue/alpha), each its
+                    #---------------------------------------------------- own <groupName><Key .../>...</groupName> child - see CLAUDE.md Round 39.
+                    for groupName, groupKeys in att.items():
+                        groupEl = ET.Element(groupName)
+                        for keyAttrs in groupKeys:
+                            keyEl = ET.Element('Key')
+                            for keyAttName in keyAttrs:
+                                keyEl.set(keyAttName, keyAttrs[keyAttName])
+                            groupEl.append(keyEl)
+                        xmlChan.append(groupEl)
+                elif type(att) is dict: # --------------------------- if channel has been stored as dict (structure)
                     dictName = list(att.keys())[0]
                     xmlChan.set(attName, dictName)
                     el = ET.Element(dictName)# -------------------- create an element containing the structure
@@ -404,7 +424,7 @@ def _JSON_get_channels(item:modo.Item):
     mChan:modo.Channel
     for mChan in item.channels():
         chanName = str(mChan.name).split(".")[0] # Important ! if not using the first part of the name, channelTriple are treated as 3 channels
-        d = _UTIL_format_channel(item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
+        d = _UTIL_format_channel(item, chanName, item.channel(chanName), mChan.type, mChan.evalType, mChan.storageType)
         d_channels[chanName] = d
             
     
@@ -1677,11 +1697,13 @@ def _USD_create_3D_texture_transform(stage:Usd.Stage, path:Path, xml:ET.Element)
 #////////////////////////////////////// UTIL
 
 # Format a channel to the right type (lots of weird stuff here, personnal cooking !)
-def _UTIL_format_channel(channel:modo.Channel, ctype:int, evalType:str, storageType:str):
+def _UTIL_format_channel(item:modo.Item, chanName:str, channel:modo.Channel, ctype:int, evalType:str, storageType:str):
     """
     Formats a modo.Channel object into a dictionary containing its properties.
 
     Parameters:
+        item (modo.Item): The item the channel belongs to (needed to resolve real gradient keys).
+        chanName (str): The channel's (possibly triple-truncated) name.
         channel (modo.Channel): The channel to be formatted.
         ctype (int): The channel type identifier.
         evalType (str): The evaluation type of the channel.
@@ -1691,24 +1713,50 @@ def _UTIL_format_channel(channel:modo.Channel, ctype:int, evalType:str, storageT
         dict: A dictionary containing the channel's value, type, evaltype, and storageType.
         If any attribute is missing or an error occurs, appropriate error messages are included.
     """
-    
+
     if (ctype == None) : ctype = "NONE"
     if (evalType == None) : evalType = "NONE"
     if (storageType == None) : storageType = "NONE"
 
-    
+
     chan = {} #----------------------------------------------- container to receive the channels properties
-    
+
     if storageType == "color1":storageType='color3'
     if evalType == "color1":evalType='color3'
-        
+
     if type(channel) is modo.ChannelTriple:
-        try: chan['value'] = str(channel.get())
-        except AttributeError: chan['value'] = "This channel has no value!"
-        except: chan['value'] = "There was an error!"
+        if ctype == lx.symbol.iCHANTYPE_GRADIENT:
+            #---------------------------------------------------- RGB(A) gradient: each component keeps its own independent key list (no
+            #---------------------------------------------------- assumption that R/G/B/A share key positions) - <red>/<green>/<blue>/<alpha>,
+            #---------------------------------------------------- each with its own <Key .../> list. Alpha is a 4th channel outside the
+            #---------------------------------------------------- ChannelTriple itself (channel.get() only ever returns R/G/B) - see CLAUDE.md Round 39.
+            try:
+                components = {}
+                for label, suffix in (("red", ".R"), ("green", ".G"), ("blue", ".B"), ("alpha", ".A")):
+                    keys = _UTIL_get_gradient_keys(item, chanName + suffix)
+                    if keys != None:
+                        components[label] = _UTIL_gradient_keys_to_xml_dicts(keys)
+                if components:
+                    chan['value'] = components
+                else:
+                    #---------------------------------------------------- Sampled fallback: RGB only, no alpha (channel.get() doesn't expose it) and no slope/type info.
+                    samplesPerComponent = [_UTIL_sample_gradient(component) for component in channel.get()]
+                    if None not in samplesPerComponent:
+                        chan['value'] = {
+                            label: [{"pos": str(i / (len(samples) - 1)), "value": str(v)} for i, v in enumerate(samples)]
+                            for label, samples in zip(("red", "green", "blue"), samplesPerComponent)
+                        }
+                    else:
+                        chan['value'] = "gradient"
+            except AttributeError: chan['value'] = "This channel has no value!"
+            except: chan['value'] = "There was an error!"
+        else:
+            try: chan['value'] = str(channel.get())
+            except AttributeError: chan['value'] = "This channel has no value!"
+            except: chan['value'] = "There was an error!"
 
     else:
-        try: chan['value'] = _UTIL_format_channel_value(channel)
+        try: chan['value'] = _UTIL_format_channel_value(item, chanName, channel)
         except AttributeError: chan['value'] = "This channel has no value!"
         except: chan['value'] = "There was an error!"
     
@@ -1741,6 +1789,135 @@ def _UTIL_get_key_from_value(dict, value)->str:
             return key
     return "None"
 
+#---------------------------------------------------- Number of Generate(t) samples taken across [0,1] when
+#---------------------------------------------------- baking a gradient channel into the XML - see CLAUDE.md Round 37.
+GRADIENT_SAMPLE_COUNT = 64
+
+# Sample a Modo gradient-backed raw channel value into a tuple of floats via GradientFilter.Generate(t)
+def _UTIL_sample_gradient(rawValue, count:int=GRADIENT_SAMPLE_COUNT):
+    """
+    Samples a Modo gradient-backed channel value into a tuple of `count` floats, evenly spaced
+    across [0, 1], via lx.object.GradientFilter.Generate(t) - see CLAUDE.md Round 37.
+
+    Parameters:
+        rawValue: The raw channel value (an lx.object.Unknown) to sample.
+        count (int): How many samples to take across [0, 1].
+
+    Returns:
+        tuple[float] or None: The sampled values, or None if rawValue doesn't cast to a GradientFilter.
+    """
+    try:
+        gradientFilter = lx.object.GradientFilter(rawValue)
+        if not gradientFilter.test():
+            return None
+        return tuple(gradientFilter.Generate(i / (count - 1)) for i in range(count))
+    except Exception:
+        return None
+
+#---------------------------------------------------- Cached lx.object.ChannelRead, lazily fetched (only
+#---------------------------------------------------- needed for gradient channels) - see CLAUDE.md Round 38.
+_channelRead = None
+
+# Get (and cache) the scene's lx.object.ChannelRead interface, used to reach a channel's real Envelope
+def _UTIL_get_channel_read():
+    global _channelRead
+    if _channelRead != None:
+        return _channelRead
+    try:
+        scene = modo.scene.current()
+        sceneContext = lx.object.Item(scene.sceneItem).Context()
+        rawScene = lx.object.Scene(sceneContext)
+        channelRead = lx.object.ChannelRead(rawScene.Channels('edit', 0.0))
+        _channelRead = channelRead if channelRead.test() else None
+    except Exception:
+        _channelRead = None
+    return _channelRead
+
+# Extract a gradient-backed channel's real discrete keys via its Envelope
+def _UTIL_get_gradient_keys(item:modo.Item, channelName:str):
+    """
+    Reads a gradient-backed channel's real keys via lx.object.ChannelRead.Envelope(item, index) and
+    its Keyframe enumerator - see CLAUDE.md Round 38/39 (explore_tools/gradient_keys_diag.py).
+
+    Parameters:
+        item (modo.Item): The item the channel belongs to.
+        channelName (str): The full channel name (e.g. "value", "color.R").
+
+    Returns:
+        tuple[tuple[float,float,int,float,int]] or None: (position, value, slopeType, slope, weighted)
+        per key, in envelope order - all read from the outgoing (side=1) tangent, or None if the
+        channel/envelope couldn't be resolved. slopeType/weighted are Modo's raw enum values, not yet
+        decoded against real curve shapes (Linear/Bezier/Stepped/...) - see CLAUDE.md Round 39.
+    """
+    channelRead = _UTIL_get_channel_read()
+    if channelRead == None:
+        return None
+    try:
+        rawItem = lx.object.Item(item)
+        index = rawItem.ChannelLookup(channelName)
+        envelopeRaw = channelRead.Envelope(rawItem, index)
+        if envelopeRaw == None:
+            return None
+        envelope = lx.object.Envelope(envelopeRaw)
+        if not envelope.test():
+            return None
+
+        keyframe = lx.object.Keyframe(envelope.Enumerator())
+        keyframe.First()
+        keys = []
+        while True:
+            #---------------------------------------------------- Slope/type read independently so a failure there
+            #---------------------------------------------------- doesn't discard this key's position/value too.
+            try:
+                slopeType, weighted = keyframe.GetSlopeType(1)
+            except Exception:
+                slopeType, weighted = None, None
+            try:
+                slope = keyframe.GetSlope(1)
+            except Exception:
+                slope = None
+            keys.append((keyframe.GetTime(), keyframe.GetValueF(1), slopeType, slope, weighted))
+            try:
+                keyframe.Next()
+            except Exception:
+                break
+        return tuple(keys)
+    except Exception:
+        return None
+
+#---------------------------------------------------- Lazy cache mapping Keyframe.GetSlopeType()'s integer to its
+#---------------------------------------------------- symbolic Modo name (e.g. "DIRECT"), built from the real
+#---------------------------------------------------- lx.symbol.iSLOPE_* values (not hardcoded numbers, so it stays
+#---------------------------------------------------- correct regardless of what those actually are) - see CLAUDE.md Round 40.
+_slopeTypeNames = None
+
+# Resolve a Keyframe.GetSlopeType() integer to its symbolic name (e.g. "DIRECT"), or the raw integer as a string if unknown
+def _UTIL_get_slope_type_name(slopeType):
+    global _slopeTypeNames
+    if _slopeTypeNames == None:
+        _slopeTypeNames = {}
+        for name in ("AUTO", "AUTOFLAT", "DIRECT", "FLAT", "LINEAR_IN", "LINEAR_OUT", "SMOOTHFLAT", "STEPPED"):
+            try:
+                _slopeTypeNames[getattr(lx.symbol, "iSLOPE_" + name)] = name
+            except Exception:
+                pass
+    return _slopeTypeNames.get(slopeType, str(slopeType))
+
+# Convert _UTIL_get_gradient_keys' output into the list-of-dicts shape _XML_get_channels expands into <Key .../> elements
+def _UTIL_gradient_keys_to_xml_dicts(keys):
+    #---------------------------------------------------- "weighted" has no equivalent named symbol table in the
+    #---------------------------------------------------- Modo SDK (unlike slopeType) - treated as a plain boolean.
+    return [
+        {
+            "pos": str(pos),
+            "value": str(value),
+            "slopeType": _UTIL_get_slope_type_name(slopeType) if slopeType != None else "None",
+            "slope": str(slope),
+            "weighted": str(bool(weighted)) if weighted != None else "None",
+        }
+        for pos, value, slopeType, slope, weighted in keys
+    ]
+
 # Parse a Modo channel value string ("0.5" or "(r, g, b)") into a Python float or tuple of floats.
 def _UTIL_parse_value_string(valueString:str):
     cleaned = valueString.strip()
@@ -1750,28 +1927,41 @@ def _UTIL_parse_value_string(valueString:str):
     return parts[0] if len(parts) == 1 else tuple(parts)
 
 # Format any channel value to given type
-def _UTIL_format_channel_value(channel:modo.Channel): 
+def _UTIL_format_channel_value(item:modo.Item, chanName:str, channel:modo.Channel):
     """
     Formats the value of a modo.Channel object based on its type.
 
     Parameters:
+        item (modo.Item): The item the channel belongs to (needed to resolve real gradient keys).
+        chanName (str): The channel's name.
         channel (modo.Channel): The channel whose value needs to be formatted.
 
     Returns:
         str or dict: A string representation of the channel's value for integer,
-        float, and eval types. For gradient type, returns "gradient". For storage
-        types, returns a dictionary with matrix details if the storage type is
-        MATRIX4, or a string representation otherwise. Returns "None" for none type.
+        float, and eval types. For gradient type, returns a string tuple of its real
+        keys (see _UTIL_get_gradient_keys), sampled values as a fallback (see
+        _UTIL_sample_gradient), or "gradient" if neither could be resolved. For
+        storage types, returns a dictionary with matrix details if the storage
+        type is MATRIX4, or a string representation otherwise. Returns "None" for
+        none type.
     """
     if channel.type == lx.symbol.iCHANTYPE_INTEGER:
         return str(channel.get())
-        
+
     elif channel.type == lx.symbol.iCHANTYPE_FLOAT:
         return str(channel.get())
-        
+
     elif channel.type == lx.symbol.iCHANTYPE_GRADIENT:
+        #---------------------------------------------------- Single-ramp gradient (e.g. "value") - one <Key .../>
+        #---------------------------------------------------- per real key (see CLAUDE.md Round 38/39), sampled as a fallback.
+        keys = _UTIL_get_gradient_keys(item, chanName)
+        if keys != None:
+            return _UTIL_gradient_keys_to_xml_dicts(keys)
+        samples = _UTIL_sample_gradient(channel.get())
+        if samples != None:
+            return [{"pos": str(i / (len(samples) - 1)), "value": str(v)} for i, v in enumerate(samples)]
         return "gradient"
-        
+
     elif channel.type == lx.symbol.iCHANTYPE_STORAGE:
         if channel.storageType == lx.symbol.sTYPE_MATRIX4:
             matrix = modo.Matrix4(channel.get())

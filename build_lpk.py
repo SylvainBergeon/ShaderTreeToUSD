@@ -21,7 +21,7 @@ platformSpecifiPath = {
 }
 
 ignorepath = [".git", ".qodo", ".vscode", ".claude", ".venv", "__pycache__", ".pytest_cache", "tests",
-              os.path.join("normalize", "tools")]
+              "explore_tools", os.path.join("normalize", "tools")]
 ignorefiles = [".DS_Store", ".gitignore", "build_lpk.py", "pytest.ini", "CLAUDE.md", "ShaderTreeToUSD.code-workspace"]
 
 def listFiles(kitPath):

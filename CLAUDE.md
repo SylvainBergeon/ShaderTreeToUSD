@@ -6,8 +6,13 @@ puis le travail effectué dans Claude Code pour la mettre en œuvre. Il sert de
 point de reprise : lis-le avant de proposer des changements pour rester
 cohérent avec la direction déjà validée par l'auteur du projet.
 
-**Dernière mise à jour : 2026-08-10. Les 3 étages du pipeline sont câblés de
-bout en bout et validés dans Modo (voir plus bas).**
+**Dernière mise à jour : 2026-08-12. Les 3 étages du pipeline sont câblés de
+bout en bout et validés dans Modo (voir plus bas). Session du 2026-08-11/12 :
+corrections de bugs trouvés en testant "PF_ShaderBall_base" dans Modo/Houdini
+(Rounds 28-36 - stencil, bump/normal, displacement scalaire et vectoriel,
+fuite de câblage inter-effets), puis premier chantier sur le support des
+couches `Gradient` (Rounds 37-40 - étage 1 seulement, extraction XML des
+vraies clés/valeurs/type d'interpolation ; pas encore câblé côté USD).**
 
 **Contexte important (2026-08-08, fin de session)** : dans le setup de
 l'auteur, **le viewport GL de Houdini/Karma résout le graphe mtlx
@@ -109,7 +114,21 @@ clos).** Les 4 wrap modes mtlx (`periodic`/`clamp`/`mirror`/`constant`)
 sont aussi tous testés dans Houdini (Round 10/11/17, clos) :
 `periodic`/`clamp` fonctionnent, `mirror`/`constant` sont des limitations
 Houdini connues et diagnostiquées (`_DEBUG_diag`), pas des bugs de ce kit.
-**PRIORITAIRE pour la prochaine session** : le système de colorspace a été
+**PRIORITAIRE pour la prochaine session (2026-08-12)** : re-exporter
+"PF_ShaderBall_base" dans Modo et confirmer que les Rounds 28-40 se
+comportent comme attendu - rien de tout ce travail n'a encore été
+retesté avec un export réel depuis le Round 28. En particulier : le
+support des couches `Gradient` (Rounds 37-40) - vérifier que `value`/
+`color` (`red`/`green`/`blue`/`alpha`) montrent bien des `<Key pos=".."
+value=".."/>` avec de vraies positions/valeurs et un `slopeType` en
+toutes lettres (ex. `"DIRECT"`) dans le XML normalisé, et que le
+`txtrLocator` du Gradient apparaît. La couche `vectorDisplace` (Round 36)
+et le fix de fuite de câblage inter-effets (Round 35) sont aussi
+prioritaires - premiers tests réels jamais faits pour l'un comme pour
+l'autre. Voir "Prochaines étapes possibles" en fin de fichier pour la
+suite envisagée sur les gradients (traduction USD/mtlx, pas commencée).
+
+**Priorité précédente (toujours pas résolue)** : le système de colorspace a été
 simplifié aux Round 19-21 (table directe `MODO_COLORSPACE_TO_USD`, système
 à 4 préférences du Round 7 retiré). 9 entrées sont posées (`"(default)"`
 + 8 dérivées du vrai `cmlib` mtlx pour la config `foundry-v1`), aucune
@@ -2236,6 +2255,335 @@ toujours verts (aucun test ne couvre `ShaderTree.py`, dépendant de Modo).
 **Rien de tout ça n'est testé dans Modo/Houdini** - premier test réel à
 faire avec un fichier ayant une vraie couche `vectorDisplace`.
 
+#### Round 37, support des couches Gradient (`iCHANTYPE_GRADIENT`) — étage 1 seulement (extraction XML), PAS ENCORE CÂBLÉ CÔTÉ USD, PAS ENCORE TESTÉ DANS MODO (2026-08-11)
+
+Chantier ouvert par l'auteur : `_UTIL_format_channel_value` (étage 1,
+extraction Modo → XML brut) traitait tout channel `iCHANTYPE_GRADIENT`
+comme une boîte noire, retournant juste le littéral `"gradient"` sans
+jamais lire ses vraies clés/valeurs - même chose pour un
+`modo.ChannelTriple` gradient (ex. `color`), où `_UTIL_format_channel`
+se contentait de `str(channel.get())`, produisant la chaîne inutilisable
+déjà vue dans les exports réels : `"(<lx.object.Unknown object at
+0x...>, ...)"`. Objectif de l'auteur, en deux temps : d'abord rendre
+cette donnée disponible dans le XML (ce round), puis voir comment la
+traduire en nœuds USD/mtlx (pas fait ce round, voir plus bas).
+
+**Investigation, faite via un script de diagnostic dédié**
+(`explore_tools/gradient_diag.py`, gitignoré, hors `.lpk` via
+`build_lpk.py` - lecture seule, jamais committé/distribué), exécuté par
+l'auteur dans la console Python de Modo sur "PF_ShaderBall_base" (une
+couche `Gradient` ajoutée pour l'occasion, effet `diffColor`) :
+
+1. **`"gradient"` est un vrai type d'item du shader tree**, frère direct
+   de `imageMap`/`mask`/`advancedMaterial` (`item.type == "gradient"`) -
+   confirmé en énumérant tous les `item.type` uniques sous le render
+   item. Pas encore de branche `elif elementName == "gradient":` dans
+   `_USD_export_shadertree` - une couche Gradient dans le shader tree ne
+   produit donc actuellement **rien** côté USD (aucun diagnostic non
+   plus, silencieusement ignorée par la boucle `for child in
+   xml.findall('*')` qui ne reconnaît que les tags qu'elle sait traiter).
+2. **Cast `lx.object.Envelope` échoue ("no interface"), cast
+   `lx.object.GradientFilter` réussit** sur la valeur brute
+   (`lx.object.Unknown`) retournée par `channel.get()` d'un channel
+   gradient - pas d'énumération de clés discrètes possible/nécessaire.
+   `GradientFilter.Generate(t)` évalue directement la courbe déjà
+   interpolée à la position `t` - confirmé par un vrai balayage lisse
+   (`1.0 → 0.84 → 0.49 → 0.14 → 0.0` sur `t=0..1`), pas des valeurs de
+   clés brutes.
+3. **Deux channels gradient distincts et indépendants sur un item
+   `gradient`** : `value` (un `modo.Channel` simple, une seule rampe -
+   utilisée quand l'effet cible est scalaire) et `color` (un
+   `modo.ChannelTriple`, 3 rampes indépendantes R/G/B - utilisée quand
+   l'effet cible est une couleur) - **confirmé par l'auteur** : "les deux
+   peuvent être évaluées séparément, elles ont chacune une rampe unique".
+4. **Channels réels d'une couche Gradient** (lus depuis un export réel de
+   "PF_ShaderBall_base", couche `Gradient` sous `Shaderball_Material`) :
+   `effect`/`blend`/`opacity`/`invert`/`enable` - identiques à `imageMap`
+   (même mécanisme de blend/effect stack déjà en place, réutilisable tel
+   quel). **Absents**, contrairement à `imageMap`: `min`/`max`/
+   `brightness`/`contrast`/`swizzling`/`rgba`/`alpha` - `_USD_create_texture_adjust_nodegraph`
+   (conçue pour `imageMap`) ne pourra donc pas être réutilisée telle
+   quelle, une couche Gradient aura besoin de son propre chemin
+   d'ajustement (plus simple, `invert` seul). Nouveau : `param` (ex.
+   `"distanceX"` - le paramètre d'entrée qui pilote l'axe horizontal de
+   la rampe, l'équivalent d'un "Input Parameter" côté Modo) et `inVal`
+   (rôle encore incertain, peut-être une valeur utilisée seulement en
+   mode "constant" - pas encore élucidé).
+
+**Questions encore ouvertes, pas résolues ce round** (bloquent l'étage
+USD, pas l'étage XML) : la liste complète des valeurs possibles de
+`param` (le menu déroulant "Input Parameter" de Modo - seule
+`"distanceX"` vue jusqu'ici) et si un paramètre a un domaine/intervalle
+explicite ailleurs, ou si Modo normalise tout en `[0,1]` avant que ça
+n'atteigne le gradient (hypothèse actuelle, cohérente avec le balayage
+`Generate(0..1)` déjà observé, mais pas confirmée).
+
+**Implémenté ce round** (`ShaderTree.py`, étage 1 uniquement, sur
+consigne explicite de l'auteur - "juste extraire ce qu'on peut dans le
+XML pour l'instant") :
+
+- Nouvelle fonction `_UTIL_sample_gradient(rawValue, count=64)` :
+  cast défensif vers `lx.object.GradientFilter` (retourne `None` si le
+  cast échoue, jamais d'exception qui remonte), puis échantillonne
+  `Generate(t)` à `count` positions régulières sur `[0,1]` et retourne un
+  tuple de floats. `GRADIENT_SAMPLE_COUNT = 64` - résolution choisie
+  arbitrairement (assez pour reconstruire fidèlement une rampe une fois
+  bakée en LUT plus tard, sans faire exploser la taille du XML), pas
+  encore validée visuellement.
+- `_UTIL_format_channel_value` (channel gradient simple, ex. `value`) :
+  appelle `_UTIL_sample_gradient`, sérialise le tuple obtenu en chaîne
+  Python littérale (`str(tuple)`, ex. `"(1.0, 0.84, ..., 0.0)"`) -
+  parsable par un `eval()` en aval, même convention que les autres
+  valeurs tuple déjà utilisées partout dans ce fichier (couleurs, etc.).
+  Retombe sur l'ancien littéral `"gradient"` si l'échantillonnage échoue.
+- `_UTIL_format_channel` (branche `modo.ChannelTriple`, ex. `color`) :
+  nouveau cas spécial quand `ctype == iCHANTYPE_GRADIENT` - échantillonne
+  les 3 composantes R/G/B séparément puis les recombine (`zip`) en un
+  tuple de `count` triplets `(r, g, b)`, sérialisé de la même façon
+  (`"((r0,g0,b0), (r1,g1,b1), ...)"`). Le comportement pour un
+  `ChannelTriple` non-gradient (couleurs littérales classiques) est
+  inchangé.
+
+**Ce qui n'est PAS fait ce round, volontairement** : aucune branche
+`"gradient"` dans `_USD_export_shadertree`/`_USD_connect_texture_output_to_shader_input` -
+les données sont maintenant disponibles dans le XML mais rien ne les
+consomme encore côté USD. La traduction envisagée (bake en LUT image
+plutôt que reconstruire les nœuds `ramp4`/`splitlr` du stdlib mtlx, qui
+ne couvrent que des formes simples à 2-4 points) reste à concevoir, en
+attendant les réponses sur `param`/domaine ci-dessus.
+
+**Rien de tout ça n'est testé dans Modo** - à vérifier en priorité :
+re-exporter "PF_ShaderBall_base" (avec sa couche `Gradient` de test) et
+confirmer que `value`/`color` affichent maintenant de vrais tuples de 64
+floats dans le XML normalisé, au lieu du littéral `"gradient"`/des
+`lx.object.Unknown` illisibles. 123 tests pytest toujours verts (aucun
+test ne couvre ce chemin, dépendant de Modo).
+
+#### Round 38, gradient : extraction des vraies clés (position/valeur) au lieu d'un échantillonnage `Generate(t)` — étage 1 seulement, PAS ENCORE TESTÉ DANS MODO (2026-08-11)
+
+Suite du Round 37 : l'auteur préfère récupérer les vraies clés discrètes
+(position + valeur) qui définissent une rampe plutôt qu'un échantillonnage
+uniforme de `GradientFilter.Generate(t)` - fidélité exacte plutôt qu'une
+LUT à résolution fixe.
+
+**Investigation, via un second script de diagnostic**
+(`explore_tools/gradient_keys_diag.py`, même statut que le premier -
+gitignoré, exclu du `.lpk`, lecture seule) :
+
+1. **`Item.ChannelGradient(index)` retourne `('percent', 'percent'/'color1')`**
+   (input, output) pour les 5 channels gradient trouvés (`value`,
+   `color.R/G/B/A`) - confirme que l'axe horizontal d'un gradient est
+   toujours exprimé en `"percent"` (donc normalisé) côté Modo, quel que
+   soit le paramètre d'entrée réel choisi (`param`, ex. `"distanceX"`) -
+   répond à la question de domaine restée ouverte au Round précédent :
+   pas besoin d'aller chercher un intervalle min/max séparé, l'axe est
+   déjà en `[0,1]`.
+2. **Chemin d'accès confirmé pour une vraie `Envelope`** (le cast direct
+   `lx.object.Envelope(rawValue)` échouait au Round 37 - "no interface") :
+   passer par `Item.Context()` → `lx.object.Scene` →
+   `Scene.Channels('edit', 0.0)` → `lx.object.ChannelRead` →
+   `ChannelRead.Envelope(item, index)` (l'`index` venant de
+   `Item.ChannelLookup(nomDeChannelComplet)`) donne un vrai objet
+   `Envelope`, cette fois walkable via `Envelope.Enumerator()` →
+   `Keyframe` (`First()`/`Next()`/`GetTime()`/`GetValueF(0/1)`/
+   `GetSlope()`). Confirmé avec de vraies données : `value` a 2 clés
+   (`pos=0.0→val=1.0`, `pos=0.985→val=0.0`), `color.R`/`color.G` 2 clés
+   chacun (transition à `pos=0.065`), `color.B` 2 clés (petite variation
+   constante), `color.A` 1 seule clé (alpha constant à 1.0). `GetSlope()`
+   à 0.0 partout dans ce test (pas assez de cas pour distinguer
+   linéaire/palier/bezier - resté non exploré, capturé tel quel).
+3. **`color.A` (alpha) est un 4ᵉ channel gradient distinct**, séparé du
+   triplet R/G/B - `item.channel("color")` (le `ChannelTriple`) ne
+   retourne que 3 composantes, jamais l'alpha. **Pas géré ce round** (la
+   boucle de collecte de `_JSON_get_channels` regroupe tout par
+   `nom.split(".")[0]`, donc les 4 itérations R/G/B/A retombent toutes
+   sur la même clé `"color"` et recalculent 3 fois la même chose sans
+   jamais lire `.A`) - gap connu, pas comblé, pas demandé par l'auteur ce
+   round.
+4. **Le nœud `Gradient` a bien un `txtrLocator` lié par graphe**
+   (`sGRAPH_SHADELOC`, comme `imageMap`) - `_XML_export_item` ne
+   vérifiait ce graphe que pour `imageMap`/`noise`/`cellular`/`falloff`,
+   pas pour `gradient` : ce locator (transform UV/3D) était donc
+   silencieusement absent du XML jusqu'ici. Corrigé (voir plus bas).
+
+**Implémenté ce round** (`ShaderTree.py`, toujours étage 1 seulement -
+extraction XML, rien côté USD) :
+
+- Nouvelles fonctions `_UTIL_get_channel_read()` (cache paresseux de
+  l'interface `lx.object.ChannelRead`, construite une seule fois via le
+  chemin ci-dessus) et `_UTIL_get_gradient_keys(item, channelName)`
+  (résout l'`Envelope` réel d'un channel et retourne un tuple de
+  `(position, valueIn, valueOut)` par clé - `valueIn`/`valueOut` gardées
+  toutes les deux, même si identiques dans tous les cas observés jusqu'ici,
+  pour ne pas perdre l'info si un futur gradient a une clé en palier).
+  Toutes les deux entièrement défensives (`try/except`, ne lèvent jamais),
+  retournent `None` en cas d'échec.
+- `_UTIL_format_channel_value`/`_UTIL_format_channel` (branche
+  `ChannelTriple` gradient) essaient maintenant `_UTIL_get_gradient_keys`
+  en premier ; si ça échoue, retombent sur l'échantillonnage
+  `_UTIL_sample_gradient` du Round 37 ; si ça échoue aussi, sur l'ancien
+  littéral `"gradient"`. Trois niveaux de repli, aucun ne lève. Pour
+  `color`, les 3 composantes R/G/B sont lues séparément puis recombinées
+  par index en suppposant qu'elles partagent les mêmes positions de clé
+  (vérifié vrai sur le seul cas réel observé - Modo semble toujours clé
+  R/G/B ensemble par "stop" de gradient) - pas de fusion par union de
+  positions si elles diffèrent un jour, juste un `zip()` qui tronque à la
+  plus courte.
+- **Format XML revu sur demande de l'auteur** (2026-08-11, après un
+  premier passage en littéral Python stringifié) : `chan['value']` est
+  maintenant une **liste de dicts** (une entrée par clé) plutôt qu'une
+  chaîne, et `_XML_get_channels` a un nouveau cas `type(att) is list` qui
+  développe chaque entrée en élément enfant `<Key .../>` (à côté du cas
+  `dict` déjà existant pour `Matrix4`, tous deux avant le cas générique
+  "attribut simple"). Résultat, par clé de gradient :
+  `<value ...><Key pos="0.0" value="1.0"/><Key pos="0.985" value="0.0"/></value>`
+  et `<color ...><Key pos="0.0" color="(r,g,b)"/>...</color>` - la couleur
+  de chaque `<Key>` combine les 3 composantes R/G/B à cette position en un
+  seul attribut tuple. Le repli sur l'échantillonnage produit la même
+  forme (juste avec ~64 `<Key>` au lieu de 2-3) - schéma XML uniforme
+  quel que soit le chemin d'extraction qui a réussi. Vérifié en simulant
+  le pipeline complet (`_JSON_get_channels` → `_XML_get_channels`) hors
+  Modo avec des données factices calquées sur le vrai diagnostic - produit
+  exactement la forme demandée. `json.dump` (export JSON, `_JSON_write_file`)
+  n'est pas affecté - une liste de dicts se sérialise nativement en JSON,
+  aucun changement nécessaire là.
+- Signatures élargies pour faire passer `item`/`chanName` jusqu'à ces deux
+  fonctions (nécessaires pour `ChannelLookup`) : `_JSON_get_channels` →
+  `_UTIL_format_channel(item, chanName, ...)` → `_UTIL_format_channel_value(item, chanName, ...)`.
+  Seul site d'appel de chacune, pas de rupture d'API ailleurs.
+- `_XML_export_item` : `lx.symbol.sITYPE_GRADIENT` ajouté à la liste des
+  types déclenchant le suivi du graphe `sGRAPH_SHADELOC` (même liste que
+  `imageMap`/`noise`/`cellular`/`falloff`) - le `txtrLocator` d'un
+  gradient sera maintenant exporté comme pour un `imageMap`. **Nom du
+  symbole assumé par convention** (`item.type` vaut littéralement
+  `"gradient"`, confirmé réel ; `lx.symbol.sITYPE_GRADIENT` lui-même
+  n'apparaît pas dans le stub incomplet utilisé pour l'analyse statique -
+  si ce symbole n'existe pas réellement, ça lèvera une `AttributeError`
+  immédiate et facile à repérer/corriger).
+
+**Toujours pas fait, volontairement** : aucune branche `"gradient"` dans
+`_USD_export_shadertree` - la traduction USD/mtlx reste à concevoir.
+
+**Rien de tout ça n'est testé dans Modo** - à vérifier en priorité :
+re-exporter "PF_ShaderBall_base" et confirmer que `value`/`color` montrent
+maintenant de vrais tuples de clés (2-3 entrées courtes) au lieu des tuples
+de 64 échantillons du Round 37, et que le `txtrLocator` du Gradient
+apparaît bien dans le XML. 123 tests pytest toujours verts (aucun test ne
+couvre ce chemin, dépendant de Modo).
+
+#### Round 39, `color.A` extrait + forme XML revue en groupes indépendants par composante + type d'interpolation par clé — PAS ENCORE TESTÉ DANS MODO (2026-08-11)
+
+Deux demandes de l'auteur juste après le Round 38 :
+
+1. **Forme XML revue** : au lieu de fusionner R/G/B en une seule liste de
+   `<Key pos=".." color="(r,g,b)"/>` (hypothèse du Round 38, jamais
+   confirmée en pratique), chaque composante garde sa **propre** liste de
+   clés indépendante, imbriquée sous des éléments `<red>`/`<green>`/
+   `<blue>`/`<alpha>` à l'intérieur de `<color>` :
+   ```xml
+   <color ...>
+      <red><Key pos=".." value=".."/>...</red>
+      <green>...</green>
+      <blue>...</blue>
+      <alpha>...</alpha>
+   </color>
+   ```
+   Comble au passage le gap connu du Round 38 (`color.A` jamais lu) -
+   l'alpha est maintenant extrait comme les 3 autres composantes, via le
+   même chemin `_UTIL_get_gradient_keys(item, "color.A")` déjà confirmé
+   fonctionner par le diagnostic (une seule clé, alpha constant à 1.0 sur
+   le fichier de test). `_XML_get_channels` gagne un nouveau cas :
+   `type(att) is dict` **et** toutes ses valeurs sont des listes → un
+   élément enfant par clé du dict (nommé `red`/`green`/etc.), chacun
+   rempli de `<Key>` comme le cas `list` déjà existant - vérifié à ne pas
+   entrer en collision avec le cas `dict` simple déjà en place pour
+   `Matrix4` (celui-ci reste un dict-de-scalaires, pas un dict-de-listes,
+   testé en premier dans l'ordre des `elif`).
+2. **Type d'interpolation par clé** : l'auteur demande explicitement
+   s'il y a d'autres valeurs à extraire pour définir la forme de la
+   courbe. Confirmé dans le stub : `Keyframe.GetSlopeType(side)` (type
+   d'interpolation + drapeau "weighted") et `Keyframe.GetSlope(side)`/
+   `GetWeight(side)` (tangente/poids), par côté (`0`=entrant, `1`=sortant).
+   `_UTIL_get_gradient_keys` lit maintenant `slopeType`/`slope`/`weighted`
+   côté sortant (`side=1`) en plus de `pos`/`value`, ajoutés comme
+   attributs supplémentaires sur chaque `<Key>`. **Valeurs numériques
+   brutes, sens pas encore décodé** - aucune valeur de test observée
+   jusqu'ici n'a permis de distinguer linéaire/bezier/palier (toutes les
+   clés du fichier de test ont `slope=0.0`) ; à décoder empiriquement le
+   jour où un vrai cas d'usage l'exige (créer des clés avec des types
+   d'interpolation visiblement différents dans Modo et comparer les
+   valeurs lues).
+
+**Simplification assumée, pas testée** : `_UTIL_get_gradient_keys` ne lit
+plus que le côté sortant (`valueOut`/`side=1`) pour `value`/`slope`/
+`slopeType`/`weighted` - `valueIn` (côté entrant) n'est plus lu du tout,
+perdant la capacité de détecter une clé "en palier" (in ≠ out,
+discontinuité). Aucune clé observée jusqu'ici n'avait cette forme ; à
+revoir si un futur test en révèle une. Lecture de `slopeType`/`slope`
+individuellement protégée par son propre `try/except` (retombe sur `None`)
+pour qu'un éventuel échec ne fasse pas perdre `pos`/`value`, qui eux
+restent lus séparément et fiables.
+
+Nouvelle fonction partagée `_UTIL_gradient_keys_to_xml_dicts(keys)` -
+convertit la sortie de `_UTIL_get_gradient_keys` en liste de dicts
+`{"pos", "value", "slopeType", "slope", "weighted"}`, réutilisée à
+l'identique pour `value` (ramp simple) et chacune des 4 composantes de
+`color`. Le repli sur `_UTIL_sample_gradient` (Round 37, si l'extraction
+de vraies clés échoue) reste RGB seulement, sans alpha ni info de pente -
+seul le chemin "vraies clés" est complet.
+
+Vérifié en simulant le pipeline complet (`_JSON_get_channels` →
+`_XML_get_channels`) hors Modo avec des données factices calquées sur le
+vrai diagnostic - produit exactement la forme demandée, avec `red`/
+`green`/`blue`/`alpha` et les attributs `slopeType`/`slope`/`weighted` sur
+chaque `<Key>`. 123 tests pytest toujours verts. **Rien de tout ça n'est
+testé dans Modo** - même priorité que le Round 38 pour la prochaine
+session (re-exporter et lire le XML résultant).
+
+#### Round 40, `slopeType` écrit en toutes lettres dans le XML + `weighted` traité comme booléen — PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+Demande de l'auteur : écrire `slopeType` sous forme de chaîne
+(`slopeType="DIRECT"`, pas l'entier brut) dans le XML, et vérifier si
+`weighted` est aussi un enum nommé du même genre (l'auteur proposait par
+exemple `["auto", "manual"]`).
+
+Confirmé dans le stub (`lx/symbol.py`) : `slopeType` a bien 8 constantes
+nommées réelles - `iSLOPE_AUTO`, `iSLOPE_AUTOFLAT`, `iSLOPE_DIRECT`,
+`iSLOPE_FLAT`, `iSLOPE_LINEAR_IN`, `iSLOPE_LINEAR_OUT`,
+`iSLOPE_SMOOTHFLAT`, `iSLOPE_STEPPED` - mais le stub ne donne que les
+noms (valeurs toutes à `None`, un simple placeholder pour l'analyse
+statique), pas les vrais entiers. Plutôt que de deviner ou d'attendre un
+troisième aller-retour de diagnostic Modo pour coder ces entiers en dur,
+`_UTIL_get_slope_type_name` construit la table de correspondance
+**directement depuis les vraies constantes `lx.symbol.iSLOPE_*` à
+l'exécution** (`getattr(lx.symbol, "iSLOPE_" + name)`), mise en cache
+paresseusement - reste correct quelle que soit la valeur entière réelle
+sous-jacente, y compris si elle diffère d'une version de Modo à l'autre,
+sans dépendre du diagnostic déjà écrit
+(`explore_tools/gradient_slopetype_diag.py`, toujours utile pour une
+vérification visuelle mais plus strictement nécessaire à l'implémentation
+elle-même).
+
+**`weighted` : cherché, rien trouvé d'équivalent.** Contrairement à
+`slopeType`, aucune constante nommée dans `lx/symbol.py` ne correspond au
+second élément retourné par `GetSlopeType()` (les seules correspondances
+pour "weight" dans le stub sont sans rapport - poids de déformeur, de
+vmap, etc.). Cohérent avec la signature de l'API (`SetWeight(weight,
+reset, side)`/`GetWeight(side) -> float` existent séparément) : `weighted`
+est très probablement un simple booléen ("cette clé a-t-elle une tangente
+à poids explicite, ou pas"), pas un enum à plusieurs valeurs nommées comme
+`slopeType`. Traité comme tel - `str(bool(weighted))` (`"True"`/`"False"`)
+plutôt que d'inventer un vocabulaire non vérifié comme `"auto"`/`"manual"`
+(hypothèse de l'auteur, plausible mais aucune preuve dans le SDK pour la
+confirmer).
+
+`_UTIL_gradient_keys_to_xml_dicts` mis à jour en conséquence. Vérifié hors
+Modo avec des symboles factices (0-7 assignés arbitrairement à
+`iSLOPE_AUTO..iSLOPE_STEPPED`) que la résolution nom↔valeur fonctionne
+correctement. 123 tests pytest toujours verts. **Rien de tout ça n'est
+testé dans Modo** - à confirmer avec un vrai export : `slopeType` doit
+apparaître en toutes lettres (ex. `"DIRECT"`), pas en `"2"`.
+
 ### Limites connues, acceptées (pas d'équivalent natif dans le catalogue de preview de Storm)
 
 - **Projection triplanaire** : aucun nœud natif équivalent à
@@ -2378,9 +2726,10 @@ l'effort d'un sérialiseur `.mtlx` maison vaut le besoin réel à ce moment-là"
 ## Prochaines étapes possibles
 
 0. **PRIORITAIRE** : voir le paragraphe "PRIORITAIRE pour la prochaine
-   session" en tête de fichier (re-exporter et confirmer le Round 9 dans
-   Houdini, trancher le compromis rotation/scale/offset du Round 4, rester
-   vigilant sur bump/normal/`<constant>`).
+   session (2026-08-12)" en tête de fichier - re-exporter
+   "PF_ShaderBall_base" et confirmer les Rounds 28-40 (rien retesté en
+   conditions réelles depuis le Round 28), en particulier les couches
+   `Gradient` (Rounds 37-40) et `vectorDisplace` (Round 36).
 
 Le reste, aucune urgence, à discuter avec l'auteur :
 
@@ -2409,6 +2758,21 @@ Le reste, aucune urgence, à discuter avec l'auteur :
    `normalize/colorspace.py` (qui a déjà accès à `usdInputName`/
    `usdPreviewInputName` via `normalize_effect_channel_names`, exécutée
    avant elle) plutôt que dupliqué dans `ShaderTree.py`.
+7. **Traduction USD/mtlx des couches `Gradient`** (Rounds 37-40 ont fait
+   l'étage 1 seulement - extraction XML des vraies clés/valeurs/type
+   d'interpolation, rien côté USD). MaterialX n'a pas de nœud de rampe
+   générique à N clés arbitraires dans son stdlib (seulement des formes
+   fixes à 2-4 points : `ramp4`/`ramplr`/`ramptb`/`splitlr`/`splittb`) -
+   la piste envisagée en discussion est de "baker" chaque gradient en une
+   petite texture LUT 1D à l'export (échantillonner via les vraies clés,
+   pas `Generate(t)`) plutôt que d'essayer de reconstruire des nœuds
+   stdlib pour un nombre de clés arbitraire. Reste aussi à mapper `param`
+   (l'Input Parameter Modo, ex. `"distanceX"`) vers le nœud géométrique
+   mtlx correspondant (`<position>`, etc.) - liste complète des valeurs
+   possibles de `param` pas encore connue (une seule vue, `"distanceX"`).
+   Scripts de diagnostic Modo utilisés pour cette investigation dans
+   `explore_tools/` (gitignoré, hors `.lpk`) - utile comme référence si
+   `slopeType`/`weighted` ou `param` ont besoin d'être creusés davantage.
 
 Ne pas réintroduire de logique de cas particulier dans la construction USD —
 c'est précisément ce que cette refonte cherchait à éviter.
