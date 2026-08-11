@@ -812,7 +812,11 @@ def _USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str,
         usdInputName = context.effectUsdInputNames[effectName]
         modoInputName = _UTIL_get_key_from_value(stdMatChannelMap[lx.symbol.sITYPE_ADVANCEDMATERIAL]['principled'], usdInputName)
 
-        if context.advancedMaterialChannels.find(modoInputName) != None:
+        #----------------------------------------------------- modoInputName is None when usdInputName has no
+        #----------------------------------------------------- reverse match at all (e.g. an effect with no
+        #----------------------------------------------------- advancedMaterial-level channel counterpart) -
+        #----------------------------------------------------- xml.find(None) would raise, not return None.
+        if modoInputName != None and context.advancedMaterialChannels.find(modoInputName) != None:
             materialInputValue = context.advancedMaterialChannels.find(modoInputName).get('value')
 
             cleaned_value = materialInputValue.strip()
@@ -834,24 +838,22 @@ def _USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str,
     return output
     
 # Connect a texture to the relevant shader
-def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, name:str) -> UsdShade.Input:
+def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, name:str) -> bool:
     """
     Connects a texture output to a shader input based on the specified effect name.
-
-    This function handles different effects such as "stencil", "bump", "normal", 
-    and "displace" by creating and connecting appropriate shaders and inputs 
-    within a USD stage. It utilizes the context and XML data to determine 
-    the connections and shader configurations.
+    Special-cased for "stencil", "bump", "normal", "displace" and "vectorDisplace" -
+    every other effect goes through the generic mtlx/glPreview wiring at the end.
 
     Parameters:
         stage (Usd.Stage): The USD stage where the shader and connections are defined.
         context (ShadingContext): The shading context containing material and shader information.
         effectName (str): The name of the effect to be applied.
         output (UsdShade.Output): The output to be connected to the shader input.
-        xml (ET.Element): XML element containing additional configuration data.
+        name (str): The layer's name, used to build child prim paths.
 
     Returns:
-        UsdShade.Input: The connected shader input, or None if the effect is not found.
+        bool: Whether the connection/value assignment succeeded (from ConnectToSource/Set), or
+            None if effectName has no known mtlx input to connect to.
     """
     material:UsdShade.Material = context.material
     shader:UsdShade.Shader = context.shader
@@ -864,106 +866,89 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
         if effectName == "stencil":
             outputType = Sdf.ValueTypeNames.Float
 
-            #---------------------------------------------------- Trick : Create invert color and connect to texture
+            #---------------------------------------------------- Invert
             path:Path = material.GetPath().AppendPath(name + "_invert_color")
             invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             invertShader.CreateIdAttr('ND_invert' + _UTIL_get_node_type_prefix(outputType))
             invertShader.CreateInput("in", outputType).ConnectToSource(output)
             invertShader.CreateOutput('out', outputType)
 
-            #---------------------------------------------------- Trick : Create math round to set colors to 0 or 1 for modo stencil like
+            #---------------------------------------------------- Round to 0 or 1
             path:Path = material.GetPath().AppendPath(name + "_set_0_or_1")
             roundShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             roundShader.CreateIdAttr("ND_round_float")
             roundShader.CreateInput("in", outputType).ConnectToSource(invertShader.GetOutput('out'))
             roundOutput = roundShader.CreateOutput('out', outputType)
 
-            #---------------------------------------------------- ND_standard_surface_surfaceshader's real
-            #---------------------------------------------------- "opacity" input is color3f (verified against
-            #---------------------------------------------------- the MaterialX stdlib), not float like
-            #---------------------------------------------------- UsdPreviewSurface's - bridge with a convert
-            #---------------------------------------------------- node. `output` is reassigned so the generic
-            #---------------------------------------------------- tail code below (not a duplicate connect here)
-            #---------------------------------------------------- is what actually wires the shader input.
+            #---------------------------------------------------- Convert to color3f for standard_surface's opacity input
             path:Path = material.GetPath().AppendPath(name + "_opacity_color")
             convertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             convertShader.CreateIdAttr("ND_convert_float_color3")
             convertShader.CreateInput("in", outputType).ConnectToSource(roundOutput)
             output = convertShader.CreateOutput('out', Sdf.ValueTypeNames.Color3f)
 
-            #---------------------------------------------------- glPreview: UsdPreviewSurface has a native
-            #---------------------------------------------------- opacityThreshold input for hard cutout - the
-            #---------------------------------------------------- opacity connection itself is made generically
-            #---------------------------------------------------- below, from context.previewOutputs.
+            #---------------------------------------------------- glPreview opacityThreshold
             if exportGlPreviewMaterial and effectName in context.previewOutputs:
                 previewShader.CreateInput("opacityThreshold", Sdf.ValueTypeNames.Float).Set(0.5)
 
         elif effectName == "bump":
-            #---------------------------------------------------- Retrieve displace value in parent/channels node
+            #---------------------------------------------------- Read bump height from the advancedMaterial
             bumpHeight = float(advancedMaterialChannels.find("bumpAmp").get("value"))
 
-            #---------------------------------------------------- Create Normal map and connect to tecture out
+            #---------------------------------------------------- Bump map
             path:Path = material.GetPath().AppendPath(name + "_bumpMap")
             normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
-            # Not _UTIL_get_node_type_prefix(Vector3f): that returns "_color3" (it doesn't have a
-            # vector3 variant), which would build the nonexistent "ND_bump_color3" - ND_bump_vector3
-            # is the only id that actually exists in the MaterialX stdlib for this node.
             normalShader.CreateIdAttr("ND_bump_vector3")
             normalShader.CreateInput("height", Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
             normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(bumpHeight)
-            #---------------------------------------------------- Reassign output so the generic connect code
-            #---------------------------------------------------- below wires the shader input from this node,
-            #---------------------------------------------------- not straight from the raw texture.
             output = normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
 
-            #---------------------------------------------------- previewShader is connected further down,
-            #---------------------------------------------------- generically, from context.previewOutputs
-
         elif effectName == "normal":
-            #---------------------------------------------------- ND_normalmap's id suffix reflects the type
-            #---------------------------------------------------- of its "scale" input (float), not the
-            #---------------------------------------------------- texture's output type - see CLAUDE.md Round 34.
             outputType = Sdf.ValueTypeNames.Float
 
-            #---------------------------------------------------- Retrieve displace value in parent/channels node
-            normalHeight = 1.0 #--------------------------------- unfortunately, this value is not given by modo :: Probaly Bump height is used for normal map too, but not sure, so we set it to 1.0 for now
+            #---------------------------------------------------- normalHeight not given by Modo, defaults to 1.0
+            normalHeight = 1.0
 
-            #---------------------------------------------------- Create Normal map and connect to tecture out
+            #---------------------------------------------------- Normal map
             path:Path = material.GetPath().AppendPath(name + "_normalmap")
             normalShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             normalShader.CreateIdAttr("ND_normalmap" + _UTIL_get_node_type_prefix(outputType))
             normalShader.CreateInput("in", Sdf.ValueTypeNames.Vector3f).ConnectToSource(output)
             normalShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(normalHeight)
-            #---------------------------------------------------- Reassign output so the generic connect code
-            #---------------------------------------------------- below wires the shader input from this node,
-            #---------------------------------------------------- not straight from the raw texture.
             output = normalShader.CreateOutput('out', Sdf.ValueTypeNames.Vector3f)
-
-            #---------------------------------------------------- previewShader is connected further down,
-            #---------------------------------------------------- generically, from context.previewOutputs
 
         elif effectName == "displace":
             outputType = Sdf.ValueTypeNames.Float
 
-            #---------------------------------------------------- Retrieve displace value in parent/channels node
+            #---------------------------------------------------- Read displacement height from the advancedMaterial
             displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
 
-            #---------------------------------------------------- Create Normal map and connect to tecture out
+            #---------------------------------------------------- Displacement node, connected to the material's mtlx:displacement output
             path:Path = material.GetPath().AppendPath(name + "_displacement")
             displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             displacementShader.CreateIdAttr("ND_displacement" + _UTIL_get_node_type_prefix(outputType))
             displacementShader.CreateInput("displacement", outputType).ConnectToSource(output)
             displacementShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(displacementHeight)
-            output = displacementShader.CreateOutput('out', outputType)
-            
-            #---------------------------------------------------- Connect normalMap to shader input
+            output = displacementShader.CreateOutput('out', Sdf.ValueTypeNames.Token)
             result = material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
 
-        #---------------------------------------------------- "displace" is already fully wired above - standard_surface has no "displacement" input to connect here.
-        if effectName != "displace":
-            #---------------------------------------------------- usdTypeMap is shared with UsdPreviewSurface,
-            #---------------------------------------------------- whose "opacity" is float - standard_surface's
-            #---------------------------------------------------- own "opacity" is color3f, special-cased here.
+        elif effectName == "vectorDisplace":
+            outputType = Sdf.ValueTypeNames.Vector3f
+
+            #---------------------------------------------------- Read displacement height from the advancedMaterial
+            displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
+
+            #---------------------------------------------------- Vector displacement node, connected to the material's mtlx:displacement output
+            path:Path = material.GetPath().AppendPath(name + "_vectorDisplacement")
+            displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            displacementShader.CreateIdAttr("ND_displacement_vector3")
+            displacementShader.CreateInput("displacement", outputType).ConnectToSource(output)
+            displacementShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(displacementHeight)
+            output = displacementShader.CreateOutput('out', Sdf.ValueTypeNames.Token)
+            result = material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
+
+        #---------------------------------------------------- displace/vectorDisplace are already fully wired above
+        if effectName not in ("displace", "vectorDisplace"):
             mtlxSdfType = Sdf.ValueTypeNames.Color3f if inputName == "opacity" else usdTypeMap[inputName]
             input = shader.GetInput(inputName)
             if input.Get() != None:
@@ -971,21 +956,11 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
             else:
                 result = _USD_create_shader_input(shader, inputName, output, mtlxSdfType)
 
-        #---------------------------------------------------- Also connect to the glPreview shader, if this
-        #---------------------------------------------------- effect has a UsdPreviewSurface input AND a
-        #---------------------------------------------------- native preview network was actually built for
-        #---------------------------------------------------- it (context.previewOutputs - see the imageMap/
-        #---------------------------------------------------- constant branches in _USD_export_shadertree).
-        #---------------------------------------------------- The mtlx `output` itself is never connected
-        #---------------------------------------------------- here: it's a MaterialX node graph Storm can't
-        #---------------------------------------------------- read, which is what made textures show white.
+        #---------------------------------------------------- Also connect to the glPreview shader, if applicable
         if exportGlPreviewMaterial:
             previewInputName = context.effectPreviewInputNames.get(effectName)
             if previewInputName and effectName in context.previewOutputs:
                 previewValue = context.previewOutputs[effectName]
-                # _USD_create_shader_input already dispatches connect (UsdShade.Output) vs literal .Set()
-                # - CreateInput() is idempotent, so this safely overrides the literal default that
-                # _USD_create_mtlx_standard_surface_shader already set on this same input.
                 _USD_create_shader_input(previewShader, previewInputName, previewValue, usdTypeMap[previewInputName])
 
         return result
@@ -1071,7 +1046,7 @@ def _USD_create_mtlx_standard_surface_shader(stage:Usd.Stage, material:UsdShade.
     return shader
 
 # Create USD Shader input according to modo channel scopped
-def _USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> UsdShade.Input:
+def _USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, sdfType) -> bool:
     """
     Create a USD shader input for a given shader reference.
 
@@ -1089,8 +1064,8 @@ def _USD_create_shader_input(shaderRef:UsdShade.Shader, usdInputName, usdValue, 
         sdfType: The Sdf type of the input.
 
     Returns:
-        UsdShade.Input: The created shader input, or None if the input name
-        or value type is None.
+        bool: Whether the connection/value assignment succeeded (from ConnectToSource/Set), or
+            None if the input name or value type is None.
     """
     if usdInputName != None and type(usdValue) != None:
         _DEBUG_diag("SetValue", usdInputName, "SET %s = %s as %s" % (str(usdInputName), str(usdValue), sdfType))

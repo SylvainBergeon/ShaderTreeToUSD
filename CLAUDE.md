@@ -2156,6 +2156,86 @@ cette fonction, dépendante de Modo). **Pas encore retesté dans Modo/Houdini**
 - la correction elle-même n'a pas encore été validée par un nouvel export,
 seul le bug a été confirmé par lecture directe du `.usda` existant.
 
+#### Round 36, ajout de l'effet `vectorDisplace` + correction du typage `displacementshader` — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO/HOUDINI (2026-08-11)
+
+Demande de l'auteur : ajouter le support de l'effet Modo `vectorDisplace`
+(displacement map vectorielle, pas juste une hauteur scalaire), sur le
+même modèle que la branche `"normal"` existante - une branche dédiée dans
+`_USD_connect_texture_output_to_shader_input`, mais connectée à
+`mtlx:displacement` (comme `"displace"`) plutôt qu'à un input du shader,
+cette fois en `Vector3f`.
+
+En vérifiant les vrais nodedefs MaterialX avant d'implémenter (comme
+d'habitude cette session), trouvé un bug préexistant plus large que la
+seule nouvelle fonctionnalité : **`ND_displacement_float` et
+`ND_displacement_vector3` n'ont ni l'un ni l'autre une sortie `float`/
+`vector3` - leur vrai type de sortie est `displacementshader`** (un type
+de rôle, comme `surfaceshader`, représenté en USD par `token` - exactement
+la convention déjà utilisée correctement ailleurs dans ce fichier pour la
+sortie du shader `standard_surface` lui-même,
+`shader.CreateOutput('surface', Sdf.ValueTypeNames.Token)`). La branche
+`"displace"` existante posait `outputType` (donc `Float`) sur la sortie du
+nœud `ND_displacement_float` - un type déclaré qui ne correspond pas au
+vrai nodedef, même famille de piège que les bugs déjà documentés
+(wrapS/wrapT, `inputs:displacement` mort du Round 32). Confirmé par
+l'auteur : à corriger dans les deux branches en même temps, pas seulement
+la nouvelle.
+
+Implémenté (`ShaderTree.py`) :
+- `elif effectName == "vectorDisplace":` (nouvelle branche, calquée sur
+  `"displace"`) : lit le même channel `<displace>` de l'`advancedMaterial`
+  pour `"scale"` (une seule distance de displacement globale, qu'elle
+  s'applique à une carte scalaire ou vectorielle - pas encore confirmé
+  dans Modo que c'est bien le même channel qui pilote les deux, mais c'est
+  la seule source disponible, cohérent avec l'usage déjà fait pour
+  `"displace"`), connecte la texture (`Vector3f`, donc lue via
+  `ND_image_color3` par le mécanisme déjà générique du Round 33) à
+  l'input `"displacement"` (`vector3`, vérifié) d'un nœud
+  `ND_displacement_vector3` - id **codé en dur**, pas construit via
+  `_UTIL_get_node_type_prefix(outputType)` (qui retourne `"_color3"` pour
+  `Vector3f`, produirait le nom invalide `ND_displacement_color3` - même
+  piège déjà documenté pour `ND_bump_vector3`/`ND_normalmap`, Round 28/29).
+  Connecte le résultat à `material.outputs:mtlx:displacement`, exactement
+  comme `"displace"`.
+- Les deux branches (`"displace"` et `"vectorDisplace"`) posent maintenant
+  `Sdf.ValueTypeNames.Token` sur la sortie du nœud `ND_displacement_*`
+  (au lieu de `outputType`) - corrige le bug de typage trouvé ci-dessus
+  pour l'existant en même temps que la nouvelle branche.
+- Le garde qui saute le câblage générique d'input shader mtlx (déjà en
+  place pour `"displace"` depuis le Round 32, la sortie va directement
+  vers le output du matériau, pas un input de `standard_surface`) étendu
+  à `"vectorDisplace"` : `if effectName not in ("displace", "vectorDisplace"):`.
+- **Bug annexe trouvé et corrigé en implémentant** : le lookup inverse de
+  `_USD_connect_effect_stack` (`_UTIL_get_key_from_value(...)`, déjà
+  identifié comme fragile - décision ouverte n°4, et cause du Round 30)
+  peut retourner `None` si `usdInputName` n'a **aucune** correspondance
+  dans `stdMatChannelMap[...]['principled']` - ce qui est le cas pour le
+  nouvel `usdInputName` `"vectorDisplacement"` (aucun channel Modo direct
+  de ce nom). `context.advancedMaterialChannels.find(None)` lève un
+  `TypeError` (vérifié avec `usd-core` : `find()` exige une chaîne, pas
+  `None`) - donc sans ce fix, **toute** couche `vectorDisplace` aurait
+  planté l'export à coup sûr. Corrigé en gardant l'appel à `.find()`
+  derrière `modoInputName != None`, en plus du test déjà existant sur son
+  résultat - traite maintenant "aucune correspondance inverse" exactement
+  comme "correspondance trouvée mais channel absent" (`output` reste sans
+  valeur de fallback), au lieu de planter. Défensif pour toute future
+  extension de `usdInputName`, pas seulement `vectorDisplace`.
+
+`normalize/effect_channel_names.py` : `"vectorDisplace": "vectorDisplacement"`
+ajouté à `USD_INPUT_NAME_BY_EFFECT` ; **absent** de
+`USD_PREVIEW_INPUT_NAME_BY_EFFECT` (commenté pourquoi, même endroit que
+`lumiAmount`) - l'input `"displacement"` d'`UsdPreviewSurface` est un
+simple scalaire le long de la normale, pas de vraie displacement
+vectorielle possible côté preview. `ShaderFilters/usd_types.py` :
+`"vectorDisplacement": Sdf.ValueTypeNames.Vector3f` ajouté à `usdTypeMap`.
+
+Graphe reconstruit et vérifié type-cohérent contre `usd-core`
+(`ND_image_color3` → `ND_displacement_vector3` → `material.outputs:mtlx:displacement`,
+tous les types déclarés correspondent à leur vraie source). 123 tests
+toujours verts (aucun test ne couvre `ShaderTree.py`, dépendant de Modo).
+**Rien de tout ça n'est testé dans Modo/Houdini** - premier test réel à
+faire avec un fichier ayant une vraie couche `vectorDisplace`.
+
 ### Limites connues, acceptées (pas d'équivalent natif dans le catalogue de preview de Storm)
 
 - **Projection triplanaire** : aucun nœud natif équivalent à

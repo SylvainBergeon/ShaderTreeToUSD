@@ -39,6 +39,7 @@ USD_INPUT_NAME_BY_EFFECT = {
     "sheenTint": "sheen_color",
     "flatness": "sheen_roughness",
     "displace": "displacement",
+    "vectorDisplace": "vectorDisplacement",
 }
 
 USD_PREVIEW_INPUT_NAME_BY_EFFECT = {
@@ -55,6 +56,8 @@ USD_PREVIEW_INPUT_NAME_BY_EFFECT = {
     # (only color3f emissiveColor) - verified against the real shaderDefs.usda shipped with usd-core.
     # Modulating emissiveColor by a lumiAmount texture would need a native multiply node, which isn't
     # in Storm's fixed preview catalog - same class of limitation as contrast/min-max remap.
+    # vectorDisplace deliberately absent: UsdPreviewSurface's "displacement" input is a single float
+    # (scalar, along-normal only) - it has no true vector displacement equivalent.
 }
 
 

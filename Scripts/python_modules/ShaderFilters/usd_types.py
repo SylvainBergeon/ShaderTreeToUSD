@@ -41,6 +41,7 @@ usdTypeMap = {
     "normal": Sdf.ValueTypeNames.Vector3f,
     "in": Sdf.ValueTypeNames.Vector3f,
     "displacement": Sdf.ValueTypeNames.Float,
+    "vectorDisplacement": Sdf.ValueTypeNames.Vector3f,
 
     # ----------------------------------------- glPreview
     "diffuseColor": Sdf.ValueTypeNames.Color3f,
