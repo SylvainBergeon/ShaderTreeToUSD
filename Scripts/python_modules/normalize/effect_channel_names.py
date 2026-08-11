@@ -50,6 +50,7 @@ USD_PREVIEW_INPUT_NAME_BY_EFFECT = {
     "normal": "normal",
     "bump": "normal",  # bump and normal both drive UsdPreviewSurface's single "normal" input
     "displace": "displacement",
+    "stencil": "opacity",
     # lumiAmount deliberately absent: UsdPreviewSurface has no standalone emissive-intensity input
     # (only color3f emissiveColor) - verified against the real shaderDefs.usda shipped with usd-core.
     # Modulating emissiveColor by a lumiAmount texture would need a native multiply node, which isn't

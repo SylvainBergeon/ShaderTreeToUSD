@@ -121,8 +121,13 @@ qui a lancé
 cette discussion (mtlx ne force pas `"raw"`/l'équivalent pour les normal
 maps, contrairement à glPreview - voir la session du 2026-08-10 avant le
 Round 19) reste **non résolu**. Rester vigilant sur bump/normal/
-`<constant>` (la couche, pas le wrap mode), toujours non exercés par le
-fichier de test "PF_ShaderBall_base".
+`<constant>`/**stencil** (la couche, pas le wrap mode), toujours non
+exercés par le fichier de test "PF_ShaderBall_base". **Stencil en
+particulier** (Round 28) : trois bugs corrigés (id de nœud invalide, trick
+invert+round mort, mismatch de type `opacity` float/color3f) + glPreview
+ajouté (`opacity` + `opacityThreshold=0.5`), vérifiés uniquement contre
+`usd-core`/MaterialX standalone - **rien testé dans Modo/Houdini**, à
+faire en priorité avec un fichier de test qui a une vraie couche stencil.
 
 ## Le projet
 
@@ -1679,6 +1684,477 @@ l'entrée devenue redondante dans `logEnabledBySection`. Les deux noms
 gardaient de toute façon le même flag (`logFileManagement`), donc aucun
 changement de comportement - purement un nettoyage de nommage. 122 tests
 toujours verts.
+
+#### Round 28, effet "stencil" : trois bugs mtlx corrigés + glPreview ajouté — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO/HOUDINI (2026-08-10)
+
+L'auteur demande de travailler sur l'effet "stencil" (`_USD_connect_texture_output_to_shader_input`,
+`ShaderTree.py`). Trois bugs réels trouvés en investigation (vérifiés contre le
+vrai paquet `MaterialX` standalone et `usd-core` dans `.venv`, pas supposés) :
+
+1. **Id de nœud invalide** : `'ND_invert' + str(outputType)` produisait
+   `"ND_invertfloat"` (pas de underscore) au lieu de `"ND_invert_float"` -
+   même famille de bug que `ND_normalmap`→`ND_normalmap_float` (étage 3).
+   Corrigé en réutilisant `_UTIL_get_node_type_prefix`, déjà utilisé partout
+   ailleurs dans le fichier pour construire ce genre d'id (`ND_mix`,
+   `ND_multiply`, l'invert générique de `_USD_create_texture_adjust_nodegraph`...) -
+   le code stencil ne le faisait pas, seul endroit du fichier à construire
+   son id à la main.
+2. **Le trick invert+round était mort** : le code générique juste après le
+   bloc `if effectName == "stencil":` (partagé par tous les effets)
+   reconnectait inconditionnellement l'input `"opacity"` du shader vers
+   `output` (la texture brute, non traitée) - écrasant la connexion vers
+   `roundShader` que le bloc stencil venait de faire. Vérifié avec
+   `usd-core` : `UsdShade.Input.Get()` retourne `None` sur un input
+   fraîchement connecté (pas de valeur par défaut authored), donc ce code
+   partait toujours dans la branche qui recrée la connexion depuis
+   `output`. Résultat concret : une couche stencil rendait comme un masque
+   d'opacité en niveaux de gris continu, pas le cutout dur (0 ou 1)
+   qu'implémentait le trick. Corrigé en réassignant la variable locale
+   `output` vers la sortie du nœud traité (même pattern déjà utilisé par la
+   branche `displace`, qui n'avait pas ce bug pour cette raison précise) au
+   lieu de connecter manuellement `shader` dans le bloc stencil - le code
+   générique fait maintenant le travail correctement.
+3. **Découvert en creusant le bug 2, plus large que "stencil"** :
+   `usdTypeMap["opacity"]` (`ShaderFilters/usd_types.py`) vaut `Float`,
+   mais l'input `"opacity"` réel de `ND_standard_surface_surfaceshader` est
+   `color3f` (vérifié directement contre le vrai nodedef MaterialX,
+   confirmé par `node_registry.py` qui l'avait déjà correctement catalogué -
+   `usd_types.py` n'avait jamais été croisé avec ce registre pour cette
+   entrée précise). `usdTypeMap` est une table **partagée** entre le shader
+   mtlx et `UsdPreviewSurface` (le commentaire en tête du fichier le dit
+   explicitement) - et `UsdPreviewSurface.inputs:opacity`, lui, est bien
+   `float` (vérifié dans `shaderDefs.usda`). Les deux schémas utilisent
+   donc le même nom `"opacity"` pour deux types différents - la seule
+   collision de ce genre trouvée dans la table. Comme "stencil" pointe
+   aussi vers `"opacity"` dans `stdMatChannelMap['principled'/'gtr']`, ce
+   bug ne touchait pas que les couches stencil : le channel `"opacity"`
+   propre de **tout** matériau Principled (le slider de transparence
+   générique de Modo) créait déjà un input mal typé. Resté invisible
+   jusqu'ici parce que `standard_surface` défaut `opacity` à `(1,1,1)`
+   (opaque) et que Modo défaut aussi à opaque - la valeur mal typée
+   coïncidait avec le défaut la plupart du temps.
+
+   Corrigé **sans** changer `usdTypeMap["opacity"]` (ça casserait le côté
+   glPreview, qui a raison) : le type `color3f` est spécialisé localement,
+   aux deux seuls points de construction de l'input mtlx `"opacity"`
+   (`_USD_create_mtlx_standard_surface_shader` pour la valeur littérale du
+   channel, le code générique de `_USD_connect_texture_output_to_shader_input`
+   pour la connexion texture-driven), avec `isPreview`/le nom d'input comme
+   discriminant. `_USD_create_shader_input` (le convertisseur `value string
+   -> sdfValue`) élargi pour diffuser un scalaire en `(v, v, v)` quand la
+   chaîne ne ressemble pas déjà à un tuple - nécessaire parce que
+   `opacity`/`stencil` sont de vrais scalaires côté Modo (sliders
+   d'amount), contrairement à `diffCol` etc. dont la chaîne est déjà
+   tuple-formatée ; vérifié que `.Set()` plante net sur un mismatch de
+   type scalaire/color3f (`usd-core`), donc ce cas devait être géré, pas
+   juste supposé fonctionner. Le bloc stencil pont Float->Color3f avec un
+   nouveau nœud `ND_convert_float_color3` (vérifié qu'il existe dans le
+   vrai stdlib, `float -> color3`) juste avant le point de connexion
+   générique - toute la chaîne interne (texture, invert, round) reste en
+   Float, seule la toute dernière étape convertit.
+
+**glPreview ajouté pour stencil** (absent avant ce round - `"stencil"`
+manquait de `USD_PREVIEW_INPUT_NAME_BY_EFFECT`, donc une couche stencil
+n'avait strictement aucun effet sur le matériau preview) : `"stencil":
+"opacity"` ajouté à la table (`normalize/effect_channel_names.py`).
+`UsdPreviewSurface` a un vrai input `opacityThreshold` natif pour le
+cutout dur - pas besoin de reproduire le trick round() côté preview, donc
+`_USD_create_preview_UV_texture` n'ajoute que l'inversion (1-x) (même
+convention hardcodée que le trick mtlx, composée par-dessus l'invert/
+brightness déjà géré par la couche - même pattern que `isNormal`), et le
+bloc stencil de `ShaderTree.py` pose un littéral `opacityThreshold = 0.5`
+sur `previewShader` quand une texture stencil est effectivement connectée
+(`effectName in context.previewOutputs`) - la connexion `opacity`
+elle-même passe par le mécanisme générique déjà en place
+(`context.previewOutputs`/`context.effectPreviewInputNames`), pas de code
+dédié en plus.
+
+**Décision de conception, pas dérivée de faits vérifiés (pas de Modo pour
+tester)** : `opacityThreshold = 0.5` est un choix arbitraire (seuil de
+cutout à mi-chemin) - raisonnable mais pas testé en rendu. Aussi non
+vérifié : que la sémantique "inverser le canal stencil brut" (le trick
+existant côté mtlx, appliqué tel quel côté glPreview par ce round) soit
+effectivement ce que fait Modo - c'était déjà une hypothèse non
+documentée avant ce round, seulement héritée du code existant.
+
+Toute la chaîne de nœuds (ids, types, connexions) vérifiée directement
+contre le vrai paquet `MaterialX` standalone et `usd-core` en construisant
+le graphe stencil complet dans `.venv` (pas juste une relecture). 123 tests
+pytest verts (`tests/normalize/test_effect_channel_names.py` mis à jour :
+`stencil` déplacé vers la liste des effets glPreview résolus, remplacé par
+`objectNormal` pour le test "pas d'équivalent glPreview"). **Rien de tout
+ça n'est testé dans Modo/Houdini** - priorité pour la prochaine session
+avec un fichier de test contenant une couche stencil (absente de
+"PF_ShaderBall_base" jusqu'ici, comme bump/normal/`<constant>`).
+
+Deux corrections faites en aparté dans ce round, sur demande de l'auteur :
+- Un `_` en trop ajouté à la main par l'auteur dans
+  `'ND_invert_' + _UTIL_get_node_type_prefix(outputType)` (le helper
+  retourne déjà `"_float"` avec son propre underscore) produisait
+  `"ND_invertfloat"` → `"ND_invert__float"`, toujours invalide. Revenu à
+  `'ND_invert' + _UTIL_get_node_type_prefix(outputType)`.
+- `_UTIL_get_node_type_prefix` appliqué à `displace` (id résultant
+  identique à l'id déjà en dur, `ND_displacement_float` - vérifié sûr) sur
+  demande de l'auteur, mais **pas** à `bump`/`normal` : vérifié contre le
+  vrai stdlib MaterialX que le helper produirait `"ND_bump_color3"` (le
+  helper n'a pas de variante `vector3`, seulement `_float`/`_color3`/
+  `_color4`) au lieu du seul id réel `ND_bump_vector3`, et que le suffixe
+  de `ND_normalmap` reflète le type du paramètre `scale` (float vs
+  vector2), pas le type de sortie - les deux restent donc en dur,
+  commentés pour expliquer pourquoi.
+
+#### Round 29, `bump` cassait à l'export réel dans Modo (`AttributeError`) + même bug de fallthrough que stencil corrigé pour bump/normal (2026-08-11)
+
+Premier test réel dans Modo d'une couche bump (jusqu'ici jamais exercée par
+"PF_ShaderBall_base") : crash immédiat,
+`AttributeError: 'Output' object has no attribute 'GetOutput'` sur
+`shader.CreateInput("normal", ...).ConnectToSource(textureOutput.GetOutput('out'))`
+(`_USD_connect_texture_output_to_shader_input`, branche `bump`).
+`textureOutput` est un `UsdShade.Output` (pas un `UsdShade.Shader`/
+`ConnectableAPI`) - `.GetOutput()` n'existe pas sur ce type, seul
+`.ConnectToSource()` a un sens dessus. La ligne visait en fait la sortie de
+`normalShader` (le nœud `ND_bump_vector3` qui vient d'être créé juste
+au-dessus), pas `textureOutput` (la texture brute, non traitée par le
+bump map).
+
+En corrigeant, même bug que le stencil du Round 28 (bug #2) trouvé dans
+`bump` **et** `normal` : même après avoir fixé la ligne pour cibler
+`normalShader.GetOutput('out')`, le code générique juste après le bloc
+`if/elif` (celui qui reconnecte toujours `shader.GetInput(inputName)`
+depuis la variable locale `output`) écrase cette connexion avec la texture
+brute, puisque `output` n'était jamais réassigné dans ces deux branches
+(contrairement à `displace`, qui le faisait déjà - c'est précisément pour
+ça que `displace` n'avait pas ce bug). Concrètement : le nœud
+`ND_bump_vector3`/`ND_normalmap_float` était construit dans le graphe mais
+jamais réellement utilisé par le shader - `"normal"` recevait la couleur
+brute de la texture, pas une normal map décodée.
+
+Corrigé pour les deux branches, même pattern que `displace`/`stencil` :
+suppression de la connexion manuelle à `shader`, `output` réassigné vers
+la sortie du nœud traité (`normalShader.CreateOutput(...)`) pour que le
+code générique fasse la connexion correctement. Vérifié en reconstruisant
+la chaîne contre `usd-core` : `shader.inputs:normal` pointe bien vers
+`..._bumpMap` (le nœud `ND_bump_vector3`), pas vers la texture. 123 tests
+toujours verts. **`normal` n'a pas encore été testée dans Modo** (seul
+`bump` a crashé/été testée ce round) - même classe de bug, donc corrigée
+par cohérence, mais pas confirmée en rendu.
+
+#### Round 30, crash `AttributeError: 'NoneType' object has no attribute 'GetFullName'` dans `_USD_connect_operator` — CORRIGÉ, CONFIRMÉ PAR L'AUTEUR DANS MODO (2026-08-11)
+
+Nouveau crash à l'export réel dans Modo, repéré par l'auteur juste après le
+Round 29, sur un effet dont la pile a au moins une couche texture.
+Traceback : `_USD_connect_effect_stack` → `_USD_connect_operator`, plante
+sur `input.GetFullName()` dans la ligne de diagnostic (`input` est le
+paramètre nommé `input`, en réalité l'`output` accumulé passé par
+l'appelant).
+
+Cause : dans `_USD_connect_effect_stack`, `output` (la valeur de base sur
+laquelle la première couche de la pile doit se blender) part à `None`
+(ligne 796) et n'est réassigné que si
+`context.advancedMaterialChannels.find(modoInputName) != None` (ligne
+804) - c'est-à-dire seulement si l'`advancedMaterial` courant a
+effectivement un channel litéral correspondant au `usdInputName` de cet
+effet (via le lookup inverse déjà connu comme fragile, décision ouverte
+n°4 en fin de fichier - **pas confirmé que ce soit la cause exacte de
+l'absence de match ici**, juste le mécanisme par lequel `output` peut
+rester `None`). Quand ce channel n'existe pas dans les channels de ce
+matériau précis, `output` reste `None` et part tel quel dans
+`_USD_connect_operator` comme `input` - qui jusqu'ici supposait toujours
+recevoir un vrai `UsdShade.Output`, aussi bien pour la ligne de
+diagnostic (`.GetFullName()`, le crash observé) que plus loin pour
+construire le nœud de mix (`_USD_set_or_connect(..., input)` aurait
+ensuite planté différemment, sur `eval(None)`, si le diagnostic n'avait
+pas planté en premier).
+
+Corrigé dans `_USD_connect_operator` (`ShaderTree.py`) : un `input is
+None` en entrée de fonction fait maintenant un retour anticipé qui laisse
+passer la texture de la couche telle quelle (`return output`, où `output`
+ici est `connector.output` - la sortie déjà traitée de cette couche),
+sans tenter de construire un nœud de mix contre rien - même pattern déjà
+utilisé juste en dessous pour un blend mode non supporté (ligne
+749-751). Sémantiquement cohérent : blender une texture contre "aucune
+valeur de base" n'a pas de sens, donc la première couche devient
+directement le résultat, comme si elle était seule dans la pile.
+
+**Confirmé par l'auteur dans Modo : le crash a disparu.** Le comportement
+visuel résultant (est-ce que "passer la texture telle quelle" est
+effectivement ce qui est attendu pour l'effet concerné) n'a pas fait
+l'objet d'un retour séparé - seule la disparition du crash a été
+confirmée. Reste ouverte la question de fond, pas traitée ce round :
+*pourquoi* le channel de fallback était absent pour ce cas précis -
+possiblement liée à la décision n°4 (lookup inverse toujours basé sur
+`'principled'`, jamais sur le `brdfType` réel du matériau), possiblement
+une toute autre raison - à creuser si un symptôme visuel lié à ça
+apparaît.
+
+#### Round 31, icônes `‼️`/`⁉️` de `LOG_ICON_BY_SECTION` invisibles dans la console live de Modo — CORRIGÉ, CONFIRMÉ PAR L'AUTEUR DANS MODO (2026-08-11)
+
+L'auteur signale, en comparant le log d'événements Modo exporté (`.md`,
+complet et correct) à ce qui s'affiche réellement dans la console live de
+Modo : les lignes utilisant l'icône `‼️` ("Unsupported") sont absentes de
+l'affichage live, alors qu'elles sont bien présentes dans l'export - donc
+pas un message jamais généré (le seul `print()` du fichier,
+`_DEBUG_diag`, ligne 130, est un simple f-string mono-ligne, aucun moyen
+d'y produire une chaîne vide ou un `\n` supplémentaire), mais un problème
+d'affichage propre au widget console de Modo pour ce caractère précis.
+
+Cause probable (pas vérifiable sans Modo, mais cohérente avec le seul
+point commun entre les deux icônes cassées et absent des 7 autres qui
+s'affichent bien) : `‼️` (`U+203C` + `U+FE0F`) et `⁉️` (`U+2049` +
+`U+FE0F`) sont des caractères du bloc "Dingbats/ponctuation" (hérités de
+l'ère pré-emoji), qui n'ont **pas** la présentation emoji par défaut - le
+sélecteur de variante `U+FE0F` est *nécessaire* pour forcer leur rendu en
+emoji plutôt qu'en glyphe texte. Les 7 autres icônes de la table
+(`💾📦📍🎱🔗`, sans sélecteur de variante, et `🎚️`/`🏷️`, qui en portent un
+mais sur un caractère déjà emoji par défaut du bloc pictogrammes
+`U+1F300+`, où le sélecteur ne fait rien) n'ont pas ce besoin. Le rendu de
+console de Modo semble ne pas savoir gérer cette conversion
+texte-vers-emoji forcée par sélecteur de variante sur un caractère du
+bloc ponctuation, et affiche une ligne vide au lieu de se rabattre sur le
+glyphe texte.
+
+Corrigé dans `LOG_ICON_BY_SECTION` (`ShaderTree.py`) : proposé initialement
+avec deux icônes distinctes (`"Unsupported"` → `🚫`, `"Undefined"` → `🧩`,
+toutes deux `U+1F300+`, bloc pictogrammes, comme les 7 icônes qui
+fonctionnent déjà) ; l'auteur a ensuite simplifié lui-même à une seule
+icône partagée, `🚫` pour les deux catégories. Purement cosmétique (la
+table de diagnostic XML n'est pas affectée, seul l'affichage console
+l'est - voir le commentaire déjà présent au-dessus de la table). 123 tests
+toujours verts (aucun test ne couvre `_DEBUG_diag`/cette table,
+dépendante de Modo). **Confirmé par l'auteur dans Modo** : les lignes
+`Unsupported`/`Undefined` s'affichent maintenant correctement dans la
+console live - l'hypothèse du sélecteur de variante sur un caractère
+hors du bloc pictogrammes était la bonne cause.
+
+#### Round 32, `displace` : attribut `inputs:displacement` mort sur le shader mtlx — CORRIGÉ, CONFIRMÉ DÉJÀ CORRECT DANS HOUDINI PAR L'AUTEUR (2026-08-11)
+
+Chantier ouvert par l'auteur sur l'effet displacement. Confirmé par
+l'auteur en premier lieu : **la branche `displace` fonctionne déjà
+correctement** - elle crée un nœud `ND_displacement_float`, reconnu par
+le graphe Houdini, connecté sur `material.outputs:mtlx:displacement` (pas
+sur le shader `standard_surface`) - c'est le comportement attendu, pas un
+bug (le displacement MaterialX n'est jamais un input du surface shader,
+toujours une sortie séparée du matériau - confirmé contre le vrai
+nodedef `ND_standard_surface_surfaceshader` via `node_registry.py` :
+aucun input `"displacement"` dans sa liste réelle d'inputs).
+
+Ce qui a été trouvé et corrigé, indépendant du fonctionnement ci-dessus :
+le code générique juste après le bloc `if/elif` de
+`_USD_connect_texture_output_to_shader_input` (celui qui câble
+normalement `shader.GetInput(inputName)` pour bump/normal/stencil)
+s'exécutait aussi, sans condition, pour `"displace"` - créant un
+`inputs:displacement` sur le shader `standard_surface` lui-même. Comme ce
+nom n'existe pas dans le vrai nodedef, USD ne plante pas mais n'en fait
+rien (même famille de piège que le bug `wrapS`/`wrapT` sur `ND_image`
+documenté plus haut) - un attribut mort, jamais lu par personne, en plus
+de la connexion déjà correcte faite dans la branche `displace` elle-même.
+Sans conséquence sur le rendu (confirmé par l'auteur, le graphe rendait
+déjà correctement dans Houdini avant ce round), donc traité comme un
+nettoyage de graphe, pas un bug fonctionnel.
+
+Corrigé dans `_USD_connect_texture_output_to_shader_input` (`ShaderTree.py`) :
+le code générique de câblage mtlx est maintenant sauté pour `"displace"`
+(`if effectName != "displace":`) - la branche `displace` capture
+elle-même le résultat de sa propre connexion (`result =
+material.CreateOutput(...).ConnectToSource(output)`) plutôt que de
+laisser la variable `result` être écrasée (ou, dans une version
+intermédiaire de ce fix rejetée par l'auteur, mise à `None` - l'auteur a
+fait remarquer à raison que `result` doit refléter la connexion
+réellement faite pour cet effet, pas une valeur arbitraire). Le câblage
+glPreview generique (plus bas, séparé, basé sur `context.previewOutputs`)
+n'est pas concerné et continue de s'exécuter pour `"displace"` comme
+avant - `UsdPreviewSurface` a bien un vrai input `"displacement"`,
+contrairement à `standard_surface`. 123 tests toujours verts (aucun test
+ne couvre cette fonction, dépendante de Modo).
+
+#### Round 33, `_USD_create_texture_adjust_nodegraph` : le mécanisme d'extraction alpha/swizzling n'a probablement jamais fonctionné, pour aucun effet — CORRIGÉ, PAS ENCORE TESTÉ DANS MODO/HOUDINI (2026-08-11)
+
+Parti d'une question simple de l'auteur sur le displacement ("quel type de
+texture peut alimenter un nœud `mtlx:displacement`"), l'investigation a
+débordé sur un bug bien plus large que le displacement lui-même, une fois
+la question de conception sur `_USD_connect_texture_output_to_shader_input`
+close (Round 32).
+
+Deux couches de bug empilées, trouvées en traçant précisément les types
+USD à travers `_USD_create_texture_adjust_nodegraph` :
+
+1. **Couche visible** : la fin de la fonction réassignait `outType` à
+   `Color3f` par défaut (`alphaMode` `"ignore"` ou tout autre valeur que
+   `"only"`), **quel que soit le type réellement demandé par l'effet
+   appelant** - correct par coïncidence pour les effets déjà `Color3f`
+   (diffColor, specColor...), mais faux pour tout effet `Float`
+   (displacement, roughness, specular amount, metallic, sheen, sheen
+   roughness, transmission amount, stencil/opacity) : la sortie exposée du
+   `NodeGraph` se retrouvait déclarée `color3f` alors que sa vraie source
+   (la chaîne `ND_remap_float`/`ND_contrast_float`/`ND_multiply_float`)
+   restait `float`. Vérifié avec `usd-core` que USD accepte ce genre de
+   connexion `ConnectToSource` silencieusement (pas d'erreur, juste un
+   attribut dont le type déclaré ment sur sa vraie source) - même famille
+   de piège que le bug `wrapS`/`wrapT` déjà documenté, et que le
+   `inputs:displacement` mort du Round 32.
+2. **Couche plus profonde, trouvée en creusant la première** : les deux
+   mécanismes d'extraction de canal (`alpha="only"` et `"swizzling"`)
+   passent tous les deux par `ND_separate4_color4`, dont l'input `"in"`
+   est réellement `color4f` (vérifié contre le vrai nodedef standalone).
+   Mais **`Color4f` n'est jamais utilisé comme type de lecture nulle part
+   dans le pipeline** - `usdTypeMap` (la table qui décide du type demandé
+   à `_USD_create_texture_output`) ne contient que `Float`/`Color3f`, donc
+   le nœud `ND_image` lui-même n'est jamais construit en 4 canaux. Résultat :
+   `ND_separate4_color4` recevait toujours une source `float` ou `color3f`,
+   jamais `color4f` - **ce mécanisme d'extraction de canal n'a
+   probablement jamais fonctionné correctement, pour aucun effet, qu'il
+   soit couleur ou scalaire.** Rien dans l'historique de ce fichier
+   n'indique qu'une couche utilisant "Alpha: Only" ou "Swizzling" dans
+   Modo ait jamais été testée en rendu réel - tous les cas confirmés
+   jusqu'ici (rainbowh_Image, MetalDented01, Candle_Flame, Pixel_Panda)
+   utilisaient la lecture par défaut.
+
+Corrigé par un remaniement de `_USD_create_texture_output` et
+`_USD_create_texture_adjust_nodegraph` (`ShaderTree.py`) :
+
+- `_USD_create_texture_output` calcule maintenant un `readType` distinct
+  du type cible (`outType`, inchangé dans sa signature/ses appelants) :
+  `Color4f` si la couche a besoin d'extraire un canal (`alpha == "only"`
+  ou `swizzling` activé), sinon `outType` tel quel (comportement
+  identique à avant pour le cas par défaut, déjà confirmé correct dans
+  Houdini). `readType` est ce qui construit réellement le nœud `ND_image`
+  (via `_USD_create_UV_texture`/`_USD_create_triplanar_texture`) - donc la
+  lecture se fait bien en 4 canaux quand une extraction est prévue.
+- `_USD_create_texture_adjust_nodegraph` prend maintenant `readType`
+  (le type réel de la chaîne remap/contrast/brightness) et un nouveau
+  paramètre `targetType` (le type final voulu par l'effet) séparément.
+  Plus aucune réassignation arbitraire : un nouveau `currentType` local
+  suit fidèlement le vrai type de `adjustedTextureOutput` à chaque étape.
+  Après une extraction (alpha ou swizzle, désormais alimentée par un vrai
+  `color4f`), si `currentType` (toujours `Float` après extraction) diffère
+  de `targetType` (ex. un effet couleur swizzlé sur un seul canal), un
+  nœud `ND_convert_float_<type>` diffuse le scalaire vers le type cible -
+  réutilise le même mécanisme que le bridge opacity du Round 28
+  (`ND_convert_float_color3`), plus `ND_convert_float_vector3` pour une
+  cible `Vector3f` (normal/objectNormal) - les deux confirmés exister dans
+  le vrai stdlib MaterialX standalone. Le cas par défaut (pas
+  d'extraction) est structurellement identique à avant : `readType ==
+  targetType` dès le départ, `currentType` ne change jamais, aucun nœud de
+  conversion ajouté - zéro régression attendue sur tout ce qui est déjà
+  confirmé fonctionner.
+
+**Les trois scénarios clés vérifiés structurellement contre `usd-core`**
+(reconstruits nœud par nœud, en dehors de Modo) : effet `Float` par défaut
+sans extraction (displacement) - chaîne `float` de bout en bout, identique
+à avant ; effet `Color3f` avec swizzling (ex. diffColor sur le canal rouge)
+- lecture `color4f` → `ND_separate4_color4` → `float` → `ND_convert_float_color3`
+→ sortie `color3f`, chaque connexion type-cohérente ; effet `Float` avec
+`alpha="only"` et invert (ex. stencil) - lecture `color4f` → extraction
+alpha → `float` → `ND_invert_float` → sortie `float`. Dans les trois cas,
+chaque `.connect` pointe vers un attribut dont le type déclaré correspond
+exactement à son type réel - ce qui n'était vrai dans aucun des deux cas
+d'extraction avant ce round.
+
+**Limite connue, pas traitée ce round** : si `alpha="only"` **et**
+`swizzling` sont activés simultanément sur la même couche, le code
+exécute les deux blocs d'extraction l'un après l'autre - le second
+tenterait à nouveau `ND_separate4_color4` sur une source déjà réduite à
+`float` par le premier, remismatché. Comportement préexistant, inchangé
+par ce round (déjà présent avant, sous une forme différente) - pas de
+preuve que cette combinaison soit un état atteignable dans l'UI de Modo
+(probablement des modes mutuellement exclusifs), donc pas de garde ajoutée
+sans confirmation.
+
+**Rien de tout ça n'est testé dans Modo/Houdini.** 123 tests pytest
+toujours verts (aucun test ne couvre cette fonction, dépendante de Modo).
+Prioritaire pour la prochaine session : exporter une couche avec
+"Swizzling" activé (n'importe quel effet) et une couche stencil/displace
+avec "Alpha: Only", pour confirmer visuellement que l'extraction de canal
+fonctionne enfin.
+
+#### Round 34, `AttributeError: type object 'ValueTypeNames' has no attribute 'color3f'` sur la branche `"normal"` — CORRIGÉ (2026-08-11)
+
+Crash à l'export réel dans Modo, sur une modification faite par l'auteur
+lui-même hors session Claude Code suivie (pas un des rounds précédents) :
+la branche `elif effectName == "normal":` de
+`_USD_connect_texture_output_to_shader_input` avait été éditée pour poser
+`outputType = Sdf.ValueTypeNames.color3f` (minuscule) et construire l'id
+du nœud dynamiquement (`"ND_normalmap" + _UTIL_get_node_type_prefix(outputType)`),
+sur le modèle de ce que fait déjà la branche `"displace"` voisine.
+`Sdf.ValueTypeNames` n'a pas d'attribut `color3f` (l'API réelle est
+`Color3f`, majuscule) - `AttributeError` immédiat.
+
+Au-delà de la casse, le type visé était aussi le mauvais : contrairement à
+`ND_displacement`, dont le suffixe reflète le type de sortie,
+**le suffixe de `ND_normalmap` reflète le type de son input `"scale"`**
+(vérifié contre le vrai stdlib MaterialX, documenté à l'étage 3/Round 28-29
+- seuls `ND_normalmap_float` et `ND_normalmap_vector2` existent). Ce code
+crée `"scale"` en `Float` (`normalShader.CreateInput("scale",
+Sdf.ValueTypeNames.Float)`, ligne juste en dessous, inchangée) - le bon
+type pour `outputType` est donc `Float`, pas `Color3f`/`color3f`. Corrigé
+en `outputType = Sdf.ValueTypeNames.Float`, ce qui reproduit exactement
+l'ancien id posé en dur (`"ND_normalmap_float"`) tout en gardant la
+construction dynamique voulue par l'auteur. 123 tests toujours verts.
+
+#### Round 35, fuite de `output` entre effets dans `_USD_connect_effect_stack` — CORRIGÉ, TROUVÉ PAR L'AUTEUR EN INSPECTANT LE GRAPHE DANS HOUDINI (2026-08-11)
+
+L'auteur repère, en reconstruisant le graphe mtlx dans l'éditeur "Edit
+Material" de Houdini sur un export réel de "PF_ShaderBall_base", une
+connexion qui n'a pas de sens : le nœud `MetalDented01_Image_2_ND_mix`
+(l'opérateur de blend de la couche `displace`) a un de ses deux inputs
+connecté à `displacedment_to_normal_Image_adjust:out` - la sortie d'une
+**autre** couche, sur un **autre** effet (`normal`), qui n'a rien à voir
+avec `displace`. Confirmé en relisant directement le `.usda` généré
+(`PF_ShaderBall_base.usda`) :
+
+```
+def Shader "MetalDented01_Image_2_ND_mix"
+{
+    float inputs:bg.connect = </shadertree/Shaderball/displacedment_to_normal_Image_adjust.outputs:out>
+    float inputs:fg.connect = </shadertree/Shaderball/MetalDented01_Image_2_adjust.outputs:out>
+}
+```
+
+`fg` (la couche courante, `MetalDented01_Image_2`) est correct - `bg` (la
+pile accumulée) pointe à tort vers la sortie de `displacedment_to_normal_Image`,
+la couche de l'effet `normal` traitée juste avant dans la boucle. Bonus :
+`bg` est déclaré `float` (le type de `displace`) mais sa vraie source est
+`vector3f` (le type de `normal`) - encore un mismatch de type du même
+genre que ceux déjà documentés (Round 28/32/33), lui aussi une
+conséquence du bug ci-dessous, pas une cause séparée.
+
+Cause : dans `_USD_connect_effect_stack`, la variable accumulatrice
+`output` est déclarée **une seule fois, avant** la boucle `for effectName
+in context.effectsStack.keys()`, jamais réinitialisée à chaque nouvel
+effet - elle ne se remet à `None` que si le lookup de fallback vers la
+valeur littérale de l'`advancedMaterial` réussit (`context.advancedMaterialChannels.find(modoInputName)`).
+Sur ce fichier de test, ni `normal` ni `displace` n'ont de channel de
+fallback exact sur `Material_5` (`.find("normal")`/`.find("disp")`
+retournent tous les deux `None` - `disp` n'existe pas comme tel, seuls
+`dispVal`/`displace`/`disperse` existent, aucun ne matche le nom exact),
+donc le lookup échoue pour les deux, et `output` n'est jamais remis à
+`None` entre les deux itérations : la sortie de la couche `normal`
+(laissée dans `output` après son propre traitement) fuit tout droit dans
+le traitement de `displace`, où `_USD_connect_operator` la reçoit comme
+`input` (donc `bg`) - un effet totalement sans rapport devient
+accidentellement "la pile accumulée" d'un autre effet.
+
+**Lien avec le Round 30** : avant ce round-là, ce scénario précis (aucun
+fallback pour un effet, `output` valant encore `None` à l'entrée de sa
+boucle de connecteurs) plantait immédiatement dans `_USD_connect_operator`
+(`input.GetFullName()` sur `None`) - c'est exactement le crash corrigé au
+Round 30. Le fix du Round 30 (passer la texture telle quelle quand `input
+is None`) a débloqué l'export, mais a du même coup rendu ce bug de fuite
+inter-effets observable pour la première fois : avant, il n'avait jamais
+l'occasion de produire un mauvais câblage silencieux, il faisait planter
+l'export avant d'y arriver.
+
+Corrigé : `output = None` déplacé à l'intérieur de la boucle, en tout
+début de chaque itération sur `effectName` (`ShaderTree.py`,
+`_USD_connect_effect_stack`) - chaque effet repart de zéro, et n'hérite
+une valeur de base que de son propre lookup de fallback sur
+l'`advancedMaterial`, jamais de la sortie d'un effet précédent sans
+rapport. La valeur de retour de la fonction (déjà ignorée par son unique
+appelant, `_USD_export_shadertree` ligne 533) n'a pas d'implication
+au-delà de cette fonction. 123 tests toujours verts (aucun test ne couvre
+cette fonction, dépendante de Modo). **Pas encore retesté dans Modo/Houdini**
+- la correction elle-même n'a pas encore été validée par un nouvel export,
+seul le bug a été confirmé par lecture directe du `.usda` existant.
 
 ### Limites connues, acceptées (pas d'équivalent natif dans le catalogue de preview de Storm)
 
