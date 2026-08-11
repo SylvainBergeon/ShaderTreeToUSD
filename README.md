@@ -7,6 +7,8 @@ This plugin is intended to export your shader tree as a whole into a USD file th
 It's in beta actually, but works quite well on my side (almost for 80% of my needs) :  
 • Basic shading is supported (gtr and principled BRDFs)  
 • Basic texture layers compositing is supported (blend modes, opacity stacking)  
+• Bump, normal, and displacement maps are supported, including vector displacement  
+• Stencil (opacity cutout) layers are supported  
 • Texture UV transforms are fully supported: tiling, offset, rotation (around the tile center, matching Modo)
 • Per-layer UV map selection for meshes with more than one UV set.
 • Wrap modes (repeat/clamp/mirror/reset) are correctly generated on the MaterialX side, but "mirror" and "reset" are not currently honored by Houdini/Karma's own MaterialX implementation — a Houdini-side limitation, not something this kit can work around; "repeat"/"clamp" work correctly  
