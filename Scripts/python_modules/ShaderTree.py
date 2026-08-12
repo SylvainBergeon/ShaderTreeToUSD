@@ -27,9 +27,7 @@ except ImportError:
     
 # Fix Python 3 issues
 if sys.version_info[0] == 3:
-    xrange = range
     basestring = str
-    long = int
 
 class ShadingContext:
     """
@@ -267,9 +265,7 @@ def _XML_export_item(item:modo.Item):
     # but are not directly referenced inside the shader tree item list
     # they are connected through the itemGraph like dependencies
     #-------------------------------------------------------
-    #---------------------------------------------------- sITYPE_GRADIENT assumed to exist/match "gradient"
-    #---------------------------------------------------- by convention (unverified against a real Modo
-    #---------------------------------------------------- symbol table) - see CLAUDE.md Round 38.
+    #---------------------------------------------------- sITYPE_GRADIENT == "gradient" - confirmed real, see CLAUDE.md Round 41.
     if item.type in [lx.symbol.sITYPE_IMAGEMAP, lx.symbol.sITYPE_NOISE, lx.symbol.sITYPE_CELLULAR, lx.symbol.sITYPE_FALLOFF, lx.symbol.sITYPE_GRADIENT]:
         graph = item.itemGraph(lx.symbol.sGRAPH_SHADELOC)
     
@@ -285,7 +281,7 @@ def _XML_export_item(item:modo.Item):
     if len(item.channels()) > 0:
         channels = _XML_get_channels(item)
         out_xml.append(channels)
-        
+
     #------------------------------- Export childs
     numChild = item.childCount()
     for i in range(numChild):
@@ -329,9 +325,13 @@ def _XML_get_channels(item:modo.Item):
                         for keyAttName in keyAttrs:
                             keyEl.set(keyAttName, keyAttrs[keyAttName])
                         xmlChan.append(keyEl)
+                    #---------------------------------------------------- minPos/maxPos over this channel's own keys
+                    #---------------------------------------------------- (e.g. "value"). See CLAUDE.md Round 46.
+                    _UTIL_set_key_pos_range(xmlChan, [float(k.get('pos')) for k in xmlChan.findall('Key') if k.get('pos') != None])
                 elif type(att) is dict and att and all(type(v) is list for v in att.values()):
                     #---------------------------------------------------- Grouped gradient keys (e.g. color: red/green/blue/alpha), each its
                     #---------------------------------------------------- own <groupName><Key .../>...</groupName> child - see CLAUDE.md Round 39.
+                    allGroupPositions = []
                     for groupName, groupKeys in att.items():
                         groupEl = ET.Element(groupName)
                         for keyAttrs in groupKeys:
@@ -339,7 +339,16 @@ def _XML_get_channels(item:modo.Item):
                             for keyAttName in keyAttrs:
                                 keyEl.set(keyAttName, keyAttrs[keyAttName])
                             groupEl.append(keyEl)
+                        #---------------------------------------------------- This group's own minPos/maxPos (kept as
+                        #---------------------------------------------------- metadata, not read back downstream today).
+                        groupPositions = [float(k.get('pos')) for k in groupKeys]
+                        _UTIL_set_key_pos_range(groupEl, groupPositions)
+                        allGroupPositions.extend(groupPositions)
                         xmlChan.append(groupEl)
+                    #---------------------------------------------------- Combined minPos/maxPos across every group
+                    #---------------------------------------------------- (e.g. red+green+blue+alpha) on the parent
+                    #---------------------------------------------------- element ("color"). See CLAUDE.md Round 47.
+                    _UTIL_set_key_pos_range(xmlChan, allGroupPositions)
                 elif type(att) is dict: # --------------------------- if channel has been stored as dict (structure)
                     dictName = list(att.keys())[0]
                     xmlChan.set(attName, dictName)
@@ -1196,13 +1205,6 @@ def _USD_create_texture_output(stage:Usd.Stage, context:ShadingContext, xml:ET.E
         if (textureFilePath not in textureList):
             textureList[textureFilePath] = consolidatedTextureFilePath
     
-    #------------------------------------------------------ Change outType depending on texture format
-    # tex_format = xml.find('videoStill/channels/format').get('value')
-    # if tex_format in ["PNG", "TGA", "EXR"]:
-    #     outType = Sdf.ValueTypeNames.Color4f
-    # else:
-    #     outType = Sdf.ValueTypeNames.Color3f
-            
     #---------------------------------------------------- Create the texture locator
     materialPath = material.GetPath()
     texturePath:Path = materialPath.AppendPath(_UTIL_clean_name(xml.get('name')))
@@ -1814,30 +1816,15 @@ def _UTIL_sample_gradient(rawValue, count:int=GRADIENT_SAMPLE_COUNT):
     except Exception:
         return None
 
-#---------------------------------------------------- Cached lx.object.ChannelRead, lazily fetched (only
-#---------------------------------------------------- needed for gradient channels) - see CLAUDE.md Round 38.
-_channelRead = None
-
-# Get (and cache) the scene's lx.object.ChannelRead interface, used to reach a channel's real Envelope
-def _UTIL_get_channel_read():
-    global _channelRead
-    if _channelRead != None:
-        return _channelRead
-    try:
-        scene = modo.scene.current()
-        sceneContext = lx.object.Item(scene.sceneItem).Context()
-        rawScene = lx.object.Scene(sceneContext)
-        channelRead = lx.object.ChannelRead(rawScene.Channels('edit', 0.0))
-        _channelRead = channelRead if channelRead.test() else None
-    except Exception:
-        _channelRead = None
-    return _channelRead
-
 # Extract a gradient-backed channel's real discrete keys via its Envelope
 def _UTIL_get_gradient_keys(item:modo.Item, channelName:str):
     """
-    Reads a gradient-backed channel's real keys via lx.object.ChannelRead.Envelope(item, index) and
-    its Keyframe enumerator - see CLAUDE.md Round 38/39 (explore_tools/gradient_keys_diag.py).
+    Reads a gradient-backed channel's real keys via modo.Channel.envelope/Keyframes - see CLAUDE.md
+    Round 42. Deliberately uses the modo.* wrapper rather than lx.object directly: modo.Channel.envelope
+    reads via ChannelWrite with the SETUP action for gradient ("gradstack") channels specifically, a
+    workaround for a real Modo bug (keyframe edits lost on reopen if read via the EDIT action while the
+    scene is still in flux) baked into modo/channel.py itself - reimplementing this by hand (as the
+    Round 38 version of this function did, via lx.object.ChannelRead + EDIT) would silently drop that fix.
 
     Parameters:
         item (modo.Item): The item the channel belongs to.
@@ -1846,41 +1833,24 @@ def _UTIL_get_gradient_keys(item:modo.Item, channelName:str):
     Returns:
         tuple[tuple[float,float,int,float,int]] or None: (position, value, slopeType, slope, weighted)
         per key, in envelope order - all read from the outgoing (side=1) tangent, or None if the
-        channel/envelope couldn't be resolved. slopeType/weighted are Modo's raw enum values, not yet
-        decoded against real curve shapes (Linear/Bezier/Stepped/...) - see CLAUDE.md Round 39.
+        channel/envelope couldn't be resolved. slopeType/weighted are Modo's raw enum values - see
+        _UTIL_get_slope_type_name for slopeType's real names (Round 40/41).
     """
-    channelRead = _UTIL_get_channel_read()
-    if channelRead == None:
-        return None
     try:
-        rawItem = lx.object.Item(item)
-        index = rawItem.ChannelLookup(channelName)
-        envelopeRaw = channelRead.Envelope(rawItem, index)
-        if envelopeRaw == None:
-            return None
-        envelope = lx.object.Envelope(envelopeRaw)
-        if not envelope.test():
-            return None
-
-        keyframe = lx.object.Keyframe(envelope.Enumerator())
-        keyframe.First()
+        keyframes = modo.Channel(channelName, item).envelope.keyframes
         keys = []
-        while True:
+        for pos, value in keyframes:
             #---------------------------------------------------- Slope/type read independently so a failure there
             #---------------------------------------------------- doesn't discard this key's position/value too.
             try:
-                slopeType, weighted = keyframe.GetSlopeType(1)
+                slopeType, weighted = keyframes.GetSlopeType(1)
             except Exception:
                 slopeType, weighted = None, None
             try:
-                slope = keyframe.GetSlope(1)
+                slope = keyframes.GetSlope(1)
             except Exception:
                 slope = None
-            keys.append((keyframe.GetTime(), keyframe.GetValueF(1), slopeType, slope, weighted))
-            try:
-                keyframe.Next()
-            except Exception:
-                break
+            keys.append((pos, value, slopeType, slope, weighted))
         return tuple(keys)
     except Exception:
         return None
@@ -1917,6 +1887,13 @@ def _UTIL_gradient_keys_to_xml_dicts(keys):
         }
         for pos, value, slopeType, slope, weighted in keys
     ]
+
+# Set minPos/maxPos attributes on an XML element from a list of key positions (no-op if the list is empty).
+# See CLAUDE.md Round 46/47.
+def _UTIL_set_key_pos_range(el:ET.Element, positions:list):
+    if positions:
+        el.set('minPos', str(min(positions)))
+        el.set('maxPos', str(max(positions)))
 
 # Parse a Modo channel value string ("0.5" or "(r, g, b)") into a Python float or tuple of floats.
 def _UTIL_parse_value_string(valueString:str):
@@ -2151,14 +2128,6 @@ def _UTIL_copy_and_clean_files():
 
 # Clean the shadertree layers names (remove white space and parenthesis)
 def _UTIL_clean_name(name:str) -> str:
-    """_summary_
-
-    Args:
-        name (str): _description_
-
-    Returns:
-        str: _description_
-    """    
     originalName = name
     if (name[0] in ["0", "1", "2", "3", "4", "5", "6", "7","8", "9"]): name  = "_" + name
     name = _UTIL_replace_chars(name, ["(", ")"], "")
@@ -2167,10 +2136,6 @@ def _UTIL_clean_name(name:str) -> str:
     if name != originalName:
         _DEBUG_diag("Renaming", "Item", f"[{os.path.basename(originalName)}] renamed as [{os.path.basename(name)}]")
     return name
-
-def _UTIL_remove_chars(string, chars_to_remove):
-    translation_table = str.maketrans("", "", "".join(chars_to_remove))
-    return string.translate(translation_table)
 
 def _UTIL_replace_chars(string: str, chars_to_replace: str, replacement: str) -> str:
     pattern = "[" + re.escape("".join(chars_to_replace)) + "]"

@@ -10,9 +10,15 @@ cohérent avec la direction déjà validée par l'auteur du projet.
 bout en bout et validés dans Modo (voir plus bas). Session du 2026-08-11/12 :
 corrections de bugs trouvés en testant "PF_ShaderBall_base" dans Modo/Houdini
 (Rounds 28-36 - stencil, bump/normal, displacement scalaire et vectoriel,
-fuite de câblage inter-effets), puis premier chantier sur le support des
-couches `Gradient` (Rounds 37-40 - étage 1 seulement, extraction XML des
-vraies clés/valeurs/type d'interpolation ; pas encore câblé côté USD).**
+fuite de câblage inter-effets), puis chantier sur le support des couches
+`Gradient` : extraction XML complète et validée à l'étage 1 (Rounds 37-42 -
+vraies clés/valeurs/type d'interpolation/`minPos`/`maxPos`), mais la
+traduction côté USD/mtlx (Rounds 43-53) a été **abandonnée au Round 54** -
+aucune des 3 familles de nœuds de rampe essayées (`ND_ramp_gradient`,
+`ND_ramplr_float`, `ND_hinvlinear_float`/`ND_huniformramp_float`) ne
+s'est avérée fonctionner dans Karma malgré des graphes structurellement
+corrects. Une couche `Gradient` ne produit donc actuellement rien côté
+USD, seulement un XML normalisé fidèle.**
 
 **Contexte important (2026-08-08, fin de session)** : dans le setup de
 l'auteur, **le viewport GL de Houdini/Karma résout le graphe mtlx
@@ -2455,11 +2461,11 @@ extraction XML, rien côté USD) :
   types déclenchant le suivi du graphe `sGRAPH_SHADELOC` (même liste que
   `imageMap`/`noise`/`cellular`/`falloff`) - le `txtrLocator` d'un
   gradient sera maintenant exporté comme pour un `imageMap`. **Nom du
-  symbole assumé par convention** (`item.type` vaut littéralement
-  `"gradient"`, confirmé réel ; `lx.symbol.sITYPE_GRADIENT` lui-même
-  n'apparaît pas dans le stub incomplet utilisé pour l'analyse statique -
-  si ce symbole n'existe pas réellement, ça lèvera une `AttributeError`
-  immédiate et facile à repérer/corriger).
+  symbole assumé par convention à l'époque** (`item.type` vaut
+  littéralement `"gradient"`, confirmé réel ; `lx.symbol.sITYPE_GRADIENT`
+  lui-même n'apparaissait pas dans le stub incomplet utilisé pour
+  l'analyse statique) - **confirmé exister et valoir `'gradient'` au
+  Round 41**, via `explore_tools/dump_modo_api.py`.
 
 **Toujours pas fait, volontairement** : aucune branche `"gradient"` dans
 `_USD_export_shadertree` - la traduction USD/mtlx reste à concevoir.
@@ -2583,6 +2589,933 @@ Modo avec des symboles factices (0-7 assignés arbitrairement à
 correctement. 123 tests pytest toujours verts. **Rien de tout ça n'est
 testé dans Modo** - à confirmer avec un vrai export : `slopeType` doit
 apparaître en toutes lettres (ex. `"DIRECT"`), pas en `"2"`.
+
+#### Round 41, nouvel outil `explore_tools/dump_modo_api.py` + confirmations sur les gradients (2026-08-12)
+
+L'auteur signale l'existence d'une commande Modo déjà installée en dehors
+de ce kit, `~/Library/Application Support/Luxology/Scripts/lxserv/cmd_dumpapi.py`
+(`python.dumpAPI`, d'origine Luxology/Foundry) qui dump la structure de
+`lx`/`lxu`/`modo` via `inspect` pour l'auto-complétion IDE - mais qui
+neutralise volontairement la valeur de chaque constante à `None`
+(`do_constants()`), exactement la limite qui a coûté plusieurs allers-retours
+de diagnostic cette session (`sITYPE_GRADIENT`, `iSLOPE_*`...).
+
+Nouvel outil écrit sur ce modèle mais qui corrige ce point,
+`explore_tools/dump_modo_api.py` : même technique (`inspect.getmembers`
+sur `lx.symbol`/`lx.object`/`modo`), mais écrit directement dans
+`explore_tools/` (3 fichiers texte, gitignorés, hors `.lpk`) au lieu
+d'imprimer dans la console - donc lisibles directement par Claude Code
+sans copier-coller manuel :
+- `lx_symbol_dump.txt` - chaque constante `lx.symbol.*` avec sa **vraie**
+  valeur (int/float/str/bytes/bool uniquement - le reste, objets/types
+  complexes, filtré).
+- `lx_object_dump.txt` - chaque classe `lx.object.*`, ses méthodes, et
+  leur docstring réelle (les docstrings des méthodes builtin de Modo
+  encodent déjà la signature complète, ex.
+  `"(integer type,integer weighted) = GetSlopeType(integer side)"`).
+- `modo_dump.txt` - pareil pour le wrapper `modo.*`, sous-module par
+  sous-module.
+
+Exécuté une première fois par l'auteur, confirme plusieurs points laissés
+ouverts :
+- **`sITYPE_GRADIENT = 'gradient'`** - confirme l'hypothèse "assumée par
+  convention" du Round 38 (jamais vérifiée jusqu'ici faute de symbole
+  dans le stub tiers utilisé pour l'analyse statique).
+- **Vraies valeurs `iSLOPE_*`** : `DIRECT=0`, `AUTO=1`, `LINEAR_IN=2`,
+  `LINEAR_OUT=3`, `FLAT=4`, `AUTOFLAT=5`, `STEPPED=6`, `SMOOTHFLAT=7`.
+  Le code n'en a pas besoin en dur (`_UTIL_get_slope_type_name` les
+  résout déjà dynamiquement via `getattr` - Round 40), mais confirme que
+  cette approche est la bonne plutôt que de coder les entiers en dur.
+- **`sICHAN_GRADIENT_PARAM`/`_VALUE`/`_COLOR` = `'param'`/`'value'`/`'color'`** -
+  confirme que les noms de channel trouvés empiriquement sont bien les
+  constantes canoniques Modo, pas une coïncidence.
+- **Découverte non anticipée, pas encore explorée** : `sITYPE_GRADIENTLAYER
+  = 'gradientlayer'`, relié via un graphe `sGRAPH_GRADIENTLINKS` distinct
+  de `sGRAPH_SHADELOC` (celui déjà câblé pour le `txtrLocator`), avec ses
+  propres channels `sICHAN_GRADIENTLAYER_ENABLE`/`sICHAN_GRADIENTLAYER_OBJ`
+  et une commande `gradientFilter.addLayer`. Suggère qu'un item `gradient`
+  peut potentiellement empiler **plusieurs** couches de gradient
+  (chacune activable indépendamment, chacune avec son propre
+  `GradientFilter`), au-delà du modèle simple à une seule enveloppe
+  `value`/`color` implémenté jusqu'ici (Round 37-40). Le fichier de test
+  actuel n'utilise pas ce mécanisme (une seule couche implicite) - donc
+  l'extraction actuelle reste valide pour ce cas, mais **pas encore
+  vérifié** ce qui se passe pour un gradient à plusieurs couches - à
+  creuser si un cas réel se présente (chercher `sGRAPH_GRADIENTLINKS`
+  dans `lx_symbol_dump.txt`/tester `item.itemGraph(lx.symbol.sGRAPH_GRADIENTLINKS)`
+  sur l'item Gradient).
+
+Aucun changement de code ce round - uniquement de la documentation/outillage
+et des confirmations. `explore_tools/dump_modo_api.py` reste disponible
+pour toute future question sur l'API Modo (constantes, signatures) sans
+repasser par un script de diagnostic dédié à chaque fois.
+
+#### Round 42, `_UTIL_get_gradient_keys` réécrite pour utiliser `modo.Channel.envelope` au lieu de `lx.object` à la main — corrige un vrai bug de action layer, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+Suite directe du Round 41 : au-delà des dumps `inspect`-based, l'auteur
+signale que le vrai code source du package `modo` est lisible directement
+sur disque (`.../Modo17.1v1_FINAL_ARM.app/Contents/Resources/python3kit/extra/Python/Scripts/modo/channel.py`) -
+bien plus fiable qu'un dump réfléchi (qui ne capture que les signatures,
+pas l'implémentation, et rate les `@property` puisque `dump_modo_api.py`
+ne filtre que sur `inspect.isroutine`). Lu intégralement.
+
+Deux découvertes qui remettent en cause l'implémentation du Round 38 :
+
+1. **Bug de action layer trouvé** : `modo.Channel.envelope` (la vraie
+   propriété officielle) lit l'enveloppe via `ChannelWrite.Envelope(item,
+   index)` avec l'action `lx.symbol.s_ACTIONLAYER_SETUP` - **pas `EDIT`** -
+   spécifiquement pour les channels gradient (`evalType == "gradstack"`).
+   Le commentaire du code source cite explicitement un bug Modo connu
+   (#47584) : "keyframe edits lost after re-opening scene... happens when
+   the keys were inserted with the 'edit' action and the scene is saved
+   while the scene is still in flux". `_UTIL_get_channel_read` (Round 38)
+   utilisait `ChannelRead` avec l'action `'edit'` codée en dur - sans ce
+   contournement, l'extraction pourrait lire des données de gradient
+   obsolètes/fausses dans exactement ce scénario. Fonctionnait sur le
+   fichier de test (scène pas dans cet état particulier), mais le bug
+   restait latent.
+2. **Chemin d'accès bien plus simple que `lx.object` à la main** :
+   `modo.Channel(channelName, item).envelope` fait tout le travail
+   (résolution d'index, action layer correcte, cast `ChannelWrite`) en
+   une ligne. `Envelope.keyframes` retourne un objet `Keyframes` itérable
+   (`for pos, value in keyframes: ...`), avec `GetSlopeType`/`GetSlope`
+   directement accessibles dessus (relayés vers le `lx.object.Keyframe`
+   sous-jacent via `__getattr__`). Explique au passage pourquoi le tout
+   premier essai du Round 37 (caster la valeur brute du channel
+   directement en `lx.object.Envelope`) échouait ("no interface") : la
+   vraie enveloppe ne s'obtient jamais depuis la valeur brute du channel,
+   seulement via `ChannelWrite.Envelope(item, index)`.
+
+Corrigé : `_UTIL_get_channel_read`/`_channelRead` (Round 38, la
+plomberie `lx.object.Item.Context() → Scene → ChannelRead`) entièrement
+supprimés - plus nécessaires. `_UTIL_get_gradient_keys` réécrite pour
+utiliser `modo.Channel(channelName, item).envelope.keyframes` - même
+signature de retour qu'avant (tuple de `(pos, value, slopeType, slope,
+weighted)`), donc `_UTIL_gradient_keys_to_xml_dicts`/les appelants dans
+`_UTIL_format_channel`/`_UTIL_format_channel_value` n'ont pas eu besoin
+de changer. Le repli `_UTIL_sample_gradient` (Round 37,
+`GradientFilter.Generate(t)`) conservé tel quel comme filet de sécurité
+si `modo.Channel(...).envelope` lève malgré tout.
+
+123 tests pytest toujours verts (aucun test ne couvre ce chemin,
+dépendant de Modo). **Pas encore testé dans Modo** - à vérifier avec un
+vrai export que `value`/`color` donnent toujours les mêmes clés
+qu'avant (le fichier de test actuel ne semble pas être dans l'état de
+"flux" que corrige le changement de action layer, donc aucune différence
+de résultat attendue pour lui - le vrai bénéfice est la robustesse pour
+d'autres scènes/scénarios).
+
+#### Round 43, étage 3 (USD/mtlx) pour les couches Gradient — premier cas concret `incidenceAngle`, IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+Suite des Rounds 37-42 (étage 1, extraction XML uniquement) : première
+traduction USD/mtlx réelle d'une couche `Gradient`, sur le seul cas
+d'entrée confirmé par l'auteur - `param="incidenceAngle"` (chaîne exacte
+confirmée dans un vrai export, pas devinée).
+
+**Recherche préalable, avant tout code** (même discipline que le reste de
+la session) :
+- `<viewdirection>`/`<facingratio>`/`<dotproduct>`/`<acos>` confirmés
+  exister dans le vrai stdlib MaterialX standalone. `facingratio` écarté
+  au profit de `dotproduct`+`acos` : l'auteur a confirmé que
+  `incidenceAngle` expose un **angle en degrés**, pas juste le cosinus
+  (`facingratio` s'arrête au cosinus). Pas de nœud radians→degrés natif
+  dans le stdlib - un `multiply` par `180/π` fait le travail.
+- **`<ramp>` (10 points fixes) et `<ramp_gradient>` (chaînable, illimité)
+  confirmés exister** - dépassent largement les `ramp4`/`ramplr`/`ramptb`
+  (2-4 points) déjà découverts au Round 36, qui avaient motivé le plan de
+  repli "bake en LUT" évoqué avant ce round. Les deux ont un type de
+  sortie figé `color4` (aucune variante `float`/`color3` contrairement à
+  `ramp4`/`ramplr`/`ramptb`) - une conversion finale est donc toujours
+  nécessaire.
+- **Aucun fichier `.glsl` d'implémentation pour `ramp`/`ramp_gradient`**
+  dans le stdlib (contrairement à la plupart des autres nœuds) - signal
+  qu'ils sont probablement implémentés en pur nodegraph plutôt qu'en
+  shader source natif. Vérifié en lisant directement
+  `stdlib_ng.mtlx` (le fichier de nodegraphs d'implémentation, déjà
+  consulté aux Rounds 8/10 pour `ND_tiledimage`) : `NG_ramp` (l'implémentation
+  réelle de `<ramp>`) est elle-même construite comme **9 `ramp_gradient`
+  chaînés** - confirme à la fois que l'approche "chaîner `ramp_gradient`"
+  est la bonne, et donne le patron de câblage exact à reproduire (au lieu
+  de deviner la sémantique de `prev_color`/`interval_num`/`num_intervals`) :
+  le nœud N a `interval1`/`color1` = `interval2`/`color2` du nœud N-1,
+  `prev_color` connecté à la sortie du nœud N-1 (le tout premier nœud a
+  `prev_color` = son propre `color1`, rien avant lui), `interval_num`/
+  `num_intervals` = position/nombre total de segments.
+
+**Implémenté** (`ShaderTree.py`) :
+- `MODO_SLOPE_TYPE_TO_MTLX_INTERPOLATION` - table de repli, les 8 types
+  de pente Modo (Round 40/41) regroupés sur les 3 valeurs de
+  `interpolation` de `ramp_gradient` (`linear`/`smooth`/`step`) - forcément
+  approximatif (Modo a plus de granularité), un choix raisonnable mais
+  **non vérifié visuellement** (`DIRECT`/`LINEAR_IN`/`LINEAR_OUT`→linéaire,
+  `AUTO`/`AUTOFLAT`/`FLAT`/`SMOOTHFLAT`→smooth, `STEPPED`→step).
+- `_USD_create_gradient_driver(stage, path, param)` - construit la chaîne
+  `ND_normal_vector3`(space=**world**, pas le défaut "object" - piège déjà
+  identifié en sketch)→`ND_viewdirection_vector3`(space=world)→
+  `ND_dotproduct_vector3`→`ND_acos_float`→`ND_multiply_float`(×57.29578)
+  pour `param == "incidenceAngle"` ; tout autre `param` déclenche
+  `_DEBUG_diag("Unsupported", "Gradient_Param", ...)` et retourne `None`
+  (la couche entière est alors ignorée) - même convention que toutes les
+  autres tables "on ne traduit que ce qui est confirmé" du fichier.
+- `_USD_read_gradient_keys(rampXml)` - relit les `<Key pos=".." value=".."
+  slopeType=".."/>` déjà posés par l'étage 1 (Round 38/39) directement
+  depuis le XML normalisé - **aucune dépendance Modo à ce stade**, cohérent
+  avec l'architecture à 3 étages (la construction USD ne lit que le XML,
+  jamais directement l'API Modo).
+- `_USD_create_ramp_gradient_chain(stage, path, driverOutput, keys)` -
+  reproduit le patron `NG_ramp` ci-dessus pour un nombre de clés
+  arbitraire (pas de plafond à 10, contrairement à `<ramp>`) ; une seule
+  clé se réduit à un simple `ND_constant_color4` (pas de rampe possible
+  avec un seul point).
+- `_USD_convert_gradient_output(stage, path, color4Output, targetType)` -
+  `ND_separate4_color4` puis soit `outr` direct (Float, ex. un effet
+  scalaire), soit `ND_combine3_color3` sur `outr`/`outg`/`outb` (Color3f,
+  alpha jetée).
+- `_USD_create_gradient_output(stage, materialPath, xml, targetType)` -
+  orchestrateur : lit `param`, construit le driver (retourne `None` tôt
+  si non supporté), choisit `value` (cible Float) ou `color`/`red`+`green`+
+  `blue` zippés par index (cible autre, assume les mêmes positions de clé
+  entre composantes - vrai dans tous les cas observés jusqu'ici, un
+  `_DEBUG_diag` prévient si les comptes de clés diffèrent), construit la
+  chaîne de rampe, convertit vers `targetType`.
+- Nouvelle branche `elif elementName == "gradient":` dans
+  `_USD_export_shadertree`, calquée sur `constant`/`imageMap` - réutilise
+  **sans aucune modification** `_USD_add_shader_connector_to_context`/
+  `_USD_connect_effect_stack` (déjà entièrement génériques sur n'importe
+  quelle source d'`UsdShade.Output`) pour le blend/opacity/empilement de
+  couches. Pas de câblage glPreview (aucun équivalent natif possible,
+  même famille de limite que triplanaire/noise/contrast déjà documentée).
+
+**Vérifié structurellement contre `usd-core`** (reconstruit le graphe
+complet hors Modo avec du XML factice calqué sur un vrai export - un
+gradient `value` à 2 clés et un `color` à 3 clés) : chaîne driver
+correctement typée de bout en bout, rampe `value` (1 segment) et `color`
+(2 segments chaînés, `prev_color` bien connecté au nœud précédent)
+conformes au patron `NG_ramp`, conversions finales `Float`/`Color3f`
+correctement typées. 123 tests pytest toujours verts (aucun ne couvre ce
+chemin, dépendant de Modo).
+
+**Pas testé dans Modo/Houdini.** À faire en priorité : réexporter avec la
+couche `Gradient` de test (`param="incidenceAngle"`) et confirmer dans
+Houdini que le résultat ressemble à ce que Modo affiche. Points
+spécifiquement incertains, à surveiller en premier si le rendu diverge :
+la table d'approximation `slopeType`→`interpolation`, et si Karma
+supporte réellement `ND_ramp_gradient`/`ND_viewdirection`/`ND_acos`
+(vérifiés exister dans le stdlib MaterialX, mais comme pour `mirror`/
+`constant` côté wrap modes - Round 11/17 - le support réel d'un moteur
+de rendu tiers pour un nœud stdlib n'est jamais garanti par sa seule
+présence dans la spec).
+
+#### Round 44, deux `NodeGraph` distincts pour la traduction Gradient (driver + rampe) — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+Demande de l'auteur juste après le Round 43 : regrouper la chaîne
+d'évaluation `incidenceAngle` (`normal`/`viewdirection`/`dotproduct`/
+`acos`/`multiply`) dans son propre `NodeGraph`, séparé de la rampe elle-même
+(qui a aussi son propre `NodeGraph`) - même logique de rangement que
+`UV_Transform` (Round 12) : une chaîne de calcul cohérente devient une
+seule boîte repliable dans l'éditeur de graphe, plutôt que des nœuds
+frères éparpillés sous le matériau.
+
+Implémenté en suivant exactement le patron déjà établi par
+`_USD_create_UV_transform` (interface inputs créées sur le `NodeGraph`,
+nœuds internes qui lisent `nodeGraph.GetInput(...)`, sortie unique exposée
+via `nodeGraph.CreateOutput('out', type).ConnectToSource(...)`) :
+
+- `_USD_create_gradient_driver` : la chaîne `incidenceAngle` est maintenant
+  posée dans un `NodeGraph` nommé `<gradient>_incidenceAngle` (le nom du
+  `param` en suffixe - un futur `param` supporté aurait son propre
+  `NodeGraph` nommé de la même façon), sans aucun input d'interface
+  (rien ne vient de l'extérieur - normal/viewdirection sont purement
+  procéduraux). Une seule sortie `out` (float, degrés) exposée.
+- `_USD_create_gradient_output` : la chaîne de rampe (`ND_ramp_gradient`
+  chaînés) + la conversion vers `targetType` sont maintenant posées dans
+  un second `NodeGraph`, nommé `<gradient>_Gradient`, avec un seul input
+  d'interface `x` (float) connecté à la sortie du premier `NodeGraph` -
+  `_USD_create_ramp_gradient_chain` reçoit maintenant `nodeGraph.GetInput('x')`
+  au lieu de la sortie brute du driver (`UsdShade.Input` accepté par
+  `ConnectToSource()` au même titre qu'un `UsdShade.Output`, déjà utilisé
+  ainsi par `_USD_create_UV_transform`). Sortie unique `out` (typée
+  `targetType`) exposée.
+
+Aucun changement dans `_USD_create_ramp_gradient_chain`/
+`_USD_convert_gradient_output` eux-mêmes (toujours des fonctions "plates"
+qui posent des nœuds à un `path` donné - c'est maintenant le chemin du
+`NodeGraph` "_Gradient" plutôt que celui du layer directement, mais leur
+logique interne est inchangée).
+
+**Vérifié structurellement contre `usd-core`** (même XML factice que le
+Round 43) : les deux `NodeGraph` apparaissent bien comme deux prims
+distincts, `Gradient_Gradient.inputs:x.connect` pointe correctement vers
+`Gradient_incidenceAngle.outputs:out`, et les nœuds internes de la rampe
+référencent bien l'input d'interface `x` du `NodeGraph` englobant plutôt
+qu'une connexion directe traversant la frontière. Un premier passage de
+vérification a montré un résultat `color3f` incorrect (`"float"` au lieu
+de `"color3f"`) - retracé à un artefact du script de vérification
+lui-même (deux appels de test réutilisant le même nom de gradient, donc
+le même chemin de prim, le second écrasant/réutilisant le `NodeGraph` du
+premier sans retyper son output) - **pas un bug du code réel**, qui
+construit toujours un nom de gradient unique par couche
+(`xml.get('name')`, jamais réutilisé). Reconfirmé avec des noms
+distincts : les deux types de sortie (`float`/`color3f`) sont corrects
+indépendamment. 123 tests pytest toujours verts.
+
+**Pas testé dans Modo/Houdini** - mêmes points d'incertitude que le
+Round 43 (table `slopeType`, support réel de Karma pour ces nœuds),
+inchangés par cette réorganisation purement structurelle (aucun calcul
+ne change, seul l'emplacement des prims).
+
+#### Round 45, `x`/`interval1`/`interval2` de `ND_ramp_gradient` normalisés en [0,1] — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+L'auteur repère un problème dans le Round 43/44 : "the mtlx:ramp node's
+interval values are limited between 0 and one". Vérifié directement dans
+le vrai nodedef (`stdlib_defs.mtlx`, paquet `MaterialX` standalone
+`.venv`) :
+
+```
+<nodedef name="ND_ramp_gradient" node="ramp_gradient" nodegroup="procedural2d">
+  <input name="x" type="float" value="0" uimin="0" uimax="1" />
+  <input name="interval1" type="float" value="0" uimin="0" uimax="1" />
+  <input name="interval2" type="float" value="1" uimin="0" uimax="1" />
+  ...
+```
+
+(`ND_ramp`'s `interval1..interval10` portent la même contrainte). Avant ce
+round, le driver `incidenceAngle` (Round 43) posait des **degrés bruts**
+(0-180) sur `x`, et les positions de clé extraites (`pos`, également en
+degrés, cf. "les gradients Modo ne sont pas normalisés en [0,1]" noté par
+l'auteur plus tôt) étaient posées telles quelles sur `interval1`/
+`interval2` - en dehors de la plage `[0,1]` déclarée par le nodedef dès
+qu'un angle dépasse 1°.
+
+Corrigé en normalisant les deux côtés par la même référence (180°), pour
+que la position relative de `x` par rapport aux intervalles reste
+mathématiquement identique, seulement ramenée dans la plage `[0,1]` :
+
+- `_USD_create_gradient_driver` (`ShaderTree.py`) : le dernier nœud de la
+  chaîne `incidenceAngle` (`normal`→`viewdirection`→`dotproduct`→`acos`)
+  ne convertit plus radians→degrés (`× 57.29577951308232`) mais
+  radians→`[0,1]` normalisé (`× 1/π`, puisque `θ_rad/π == θ_deg/180`) -
+  nœud et variable Python renommés de `degreesShader`/`degreesOutput` à
+  `normalizeShader`/`normalizeOutput` pour refléter ce nouveau rôle.
+- Nouvelle table `GRADIENT_PARAM_KEY_SCALE` (`ShaderTree.py`, à côté de
+  `MODO_SLOPE_TYPE_TO_MTLX_INTERPOLATION`) : `{"incidenceAngle": 180.0}` -
+  facteur par lequel diviser les positions de clé brutes (dans l'unité
+  native du `param`) pour rester cohérent avec la normalisation du driver.
+  Consultée dans `_USD_create_gradient_output`, appliquée à `pos` avant de
+  construire `keys` (branche `value`/Float **et** branche `color`/
+  Color3f-Color4f), avec un repli à `1.0` (no-op) pour tout `param` sans
+  entrée dans la table.
+
+Choix délibéré de garder ce facteur **par param** (pas une constante
+globale) : un futur `param` avec une plage native différente (ex. une
+distance sans borne fixe à 180) aurait besoin d'un facteur différent, pas
+forcément même de cette forme "diviser par une constante" - `1.0` par
+défaut (no-op) reste sûr pour tout `param` pas encore dans la table.
+
+**Vérifié structurellement contre `usd-core`** : reconstruit la chaîne
+complète avec des clés de test à 0°/90°/180°, confirmé que les positions
+normalisées atterrissent exactement à 0.0/0.5/1.0 - à la fois `x` (sortie
+du driver) et `interval1`/`interval2` (positions de clé) restent dans
+`[0,1]`, et la position relative (0.5 = le milieu) est préservée. 123
+tests pytest toujours verts (aucun ne couvre ce chemin encore -
+`GRADIENT_PARAM_KEY_SCALE` n'a pas de test dédié, comme le reste de la
+traduction Gradient côté USD).
+
+**Pas testé dans Modo/Houdini** - reste dans la même situation que les
+Rounds 43/44 (rien de la traduction Gradient n'a encore tourné en dehors
+de la vérification structurelle `usd-core`).
+
+#### Round 46, `GRADIENT_PARAM_KEY_SCALE` (Round 45) remplacé par `minPos`/`maxPos` calculés sur les vraies clés — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+L'auteur propose une approche plus générale que la table par-param du
+Round 45 : plutôt que de deviner/coder en dur la plage native de chaque
+`param` (`180.0` pour `incidenceAngle`, une constante qui ne dit rien sur
+ce qu'un futur `param` pourrait avoir besoin), calculer `minPos`/`maxPos`
+directement à partir de toutes les vraies positions de clé trouvées à
+l'étage 1 (extraction XML), les poser en attributs sur l'élément
+`<gradient ...>` lui-même, et s'en servir à l'étage 3 pour normaliser à la
+fois les intervalles et la sortie du driver - entièrement dérivé des
+données réelles de la couche, pas d'une table figée à maintenir par
+`param`.
+
+Implémenté :
+- **`_XML_export_item`** (`ShaderTree.py`, étage 1) : juste après avoir
+  attaché `channels` à `out_xml` pour un item `gradient`
+  (`item.type == lx.symbol.sITYPE_GRADIENT`), `channels.findall('.//Key')`
+  récupère **tous** les `<Key pos=".."/>` du sous-arbre - `value` **et**
+  les 4 `<color>/<red|green|blue|alpha>` combinés (ils partagent le même
+  domaine de `param`, pas de raison de les traiter séparément). `minPos`/
+  `maxPos` (min/max de ces positions) posés en attributs sur l'élément
+  `<gradient ...>` lui-même - pas sur `<channels>` ni sur une clé
+  particulière, pour rester au niveau de la couche entière. Repli
+  `xml.get('minPos', "0.0")`/`xml.get('maxPos', "1.0")` côté étage 3 si
+  l'attribut est absent (aucune clé trouvée) ou si le XML vient d'une
+  version antérieure à ce round.
+- **`_USD_create_gradient_driver`** : revient à produire des **degrés
+  bruts** (`× 57.29577951308232`, comme au Round 43) au lieu du `[0,1]`
+  normalisé du Round 45 - le driver ne connaît plus la normalisation, elle
+  est maintenant entièrement portée par le graphe consommateur, qui seul
+  connaît `minPos`/`maxPos` (propriété de la couche, pas du driver).
+- **`_USD_create_gradient_output`** : `keyScale`/`GRADIENT_PARAM_KEY_SCALE`
+  retirés. `minPos`/`maxPos` lus depuis `xml` (l'élément `<gradient>`),
+  gardés contre une plage dégénérée (`maxPos == minPos` → `maxPos =
+  minPos + 1.0`, évite une division par zéro si toutes les clés partagent
+  la même position). Les positions de clé extraites sont normalisées en
+  Python (`(pos - minPos) / (maxPos - minPos)`, un simple calcul sur des
+  floats déjà connus à la construction). La sortie brute (en degrés) du
+  driver, elle, ne peut pas être normalisée en Python (c'est une valeur
+  évaluée au rendu, pas une constante) - un nouveau nœud `ND_remap_float`
+  (déjà utilisé ailleurs dans ce fichier pour le post-traitement de
+  texture, `_USD_create_texture_adjust_nodegraph`) fait ce travail dans le
+  graphe mtlx lui-même : `inlow`/`inhigh` = `minPos`/`maxPos`, `outlow`/
+  `outhigh` = `0`/`1`. Posé dans le `NodeGraph` "_Gradient" (Round 44),
+  juste après l'interface input `x` ; la chaîne de rampe consomme
+  maintenant la sortie de ce remap plutôt que `x` directement.
+
+**Vérifié structurellement contre `usd-core`** : simulé le calcul
+`minPos`/`maxPos` de l'étage 1 sur un XML factice (3 clés à
+20°/60°/140°), confirmé `minPos=20.0`/`maxPos=140.0`, puis reconstruit le
+graphe complet de l'étage 3 - la clé du milieu (60°) atterrit exactement à
+`(60-20)/(140-20) = 0.3333...`, et `ND_remap_float.inputs:inlow/inhigh`
+portent bien `20`/`140` (les vraies bornes des données, pas une constante
+théorique comme `0`/`180`). 123 tests pytest toujours verts (aucun ne
+couvre ce chemin, dépendant de Modo pour l'étage 1).
+
+**Pas testé dans Modo/Houdini** - mêmes réserves que les Rounds 43-45.
+Point à surveiller en particulier : le repli `minPos=0.0`/`maxPos=1.0` (si
+aucune clé n'est trouvée) n'a jamais été exercé par un cas réel - à
+vérifier si un gradient sans clé authored (littéral `"gradient"`, tout en
+bas de la chaîne de repli du Round 38) atteint un jour cette branche.
+
+#### Round 47, `red`/`green`/`blue` traités comme 3 rampes indépendantes (pas une seule zippée par index) + normalisées sur un `minPos`/`maxPos` partagé — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+
+L'auteur repère un problème de fond dans le Round 43 : `_USD_create_gradient_output`
+lisait bien `red`/`green`/`blue` séparément (chacun avec ses propres clés,
+conformément au Round 39 - Modo permet des positions de clé indépendantes
+par composante), mais les recombinait ensuite en **zippant par index** -
+supposant implicitement que les trois composantes partagent les mêmes
+positions de clé. Faux dès qu'une composante a un nombre de clés différent
+ou des positions différentes des deux autres - exactement le cas que le
+Round 39 avait pris soin d'extraire correctement puis que le Round 43
+ignorait à la construction.
+
+**Partie 1 - une rampe mtlx par composante.** `ND_ramp_gradient` n'a de
+toute façon qu'une sortie `color4` figée (pas de variante scalaire, déjà
+noté Round 43) - rien n'empêchait de construire **trois rampes
+indépendantes** (une par composante, chacune avec ses propres clés/
+positions), d'en extraire le canal `outr` de chacune (`ND_separate4_color4`,
+en empaquetant la valeur scalaire de chaque composante en `(v,v,v,1)`
+comme le fait déjà le chemin `value`/Float), puis de recombiner les trois
+`Float` obtenus via `ND_combine3_color3` - au lieu d'essayer de faire
+porter les trois composantes par une seule rampe `color4`.
+
+**Partie 2 - alignement du domaine, signalé par l'auteur juste après**
+la partie 1 : si chaque composante est normalisée sur son **propre**
+`minPos`/`maxPos` (le Round 46 appliqué indépendamment à chacune), une clé
+à la position absolue 50 dans `red` et une clé à la position absolue 50
+dans `green` atterriraient à des `x` normalisés différents (puisque leurs
+plages diffèrent) - cassant l'alignement entre composantes et avec le
+driver, qui produit une seule valeur brute partagée pour les trois. La
+vraie sémantique : `red`/`green`/`blue` vivent sur le **même** axe de
+paramètre partagé (le `param`, ex. `incidenceAngle`), simplement avec des
+clés placées à des positions différentes sur cet axe commun - pas trois
+axes indépendants. Il faut donc les normaliser tous les trois contre la
+**même** plage.
+
+Implémenté :
+- **`_XML_get_channels`** (`ShaderTree.py`, étage 1) : chaque groupe
+  (`red`/`green`/`blue`/`alpha`) garde son propre `minPos`/`maxPos` (utile
+  comme métadonnée, pas relu en aval pour l'instant), **et** un
+  `minPos`/`maxPos` **combiné** (union des 4 plages - min des mins, max
+  des maxs) est maintenant posé sur l'élément parent `<color>` lui-même -
+  c'est celui-là que l'étage 3 consomme pour `red`/`green`/`blue`.
+  `<value>` (rampe scalaire seule, pas décomposée en composantes) garde sa
+  propre plage sans combinaison - rien à réconcilier puisqu'il n'y a pas
+  de composantes sœurs. Nouveau petit utilitaire partagé
+  `_UTIL_set_key_pos_range(el, positions)` (remplace la logique dupliquée
+  du Round 46, maintenant appelée à 3 endroits : `value`, chaque groupe,
+  `color` combiné) - retiré le hook `_XML_export_item`/`sITYPE_GRADIENT`
+  du Round 46 (plus nécessaire, le calcul se fait maintenant directement
+  là où chaque liste de `<Key>` est construite, sans reparcourir l'arbre
+  après coup ni connaître le type de l'item).
+- **`_USD_create_gradient_channel_ramp`** (nouvelle fonction,
+  `ShaderTree.py`, étage 3) : construit une rampe complète pour **une**
+  composante (`normalize` remap → chaîne `ND_ramp_gradient` → `separate4`→
+  `outr`), prenant `minPos`/`maxPos` en paramètres explicites plutôt que
+  de les lire sur son propre élément XML - permet à l'appelant de décider
+  si la plage vient de la composante elle-même (`value`) ou d'un parent
+  partagé (`color`). Chaque composante a son propre sous-espace de prims
+  (`<gradient>_Gradient/red/...`, `/green/...`, `/blue/...`) - pas de
+  collision de noms entre les trois chaînes de segments.
+- **`_USD_convert_gradient_output`** simplifiée : ne fait plus que
+  l'extraction `color4 -> Float` (`ND_separate4_color4.outr`) - les
+  branches `Color3f`/`Color4f` (recombinaison) sont devenues mortes avec
+  la nouvelle architecture (chaque appel se fait maintenant toujours avec
+  une seule composante scalaire) et ont été retirées ; le paramètre
+  `targetType` disparaît de sa signature.
+- **`_USD_create_gradient_output`** restructurée : pour un target `Float`,
+  un seul appel à `_USD_create_gradient_channel_ramp` ("value", avec la
+  plage de `<value>`). Pour tout autre target (`Color3f` - le seul autre
+  cas réel, confirmé par `usdTypeMap` qui ne contient aucune entrée
+  `Color4f`), trois appels ("red"/"green"/"blue", tous avec la plage
+  **combinée** de `<color>`), puis `ND_combine3_color3` posé directement
+  ici (déplacé hors de `_USD_convert_gradient_output`, plus besoin d'y
+  vivre séparément). Le diagnostic Round 43 "red/green/blue key counts
+  differ" retiré - plus nécessaire, chaque composante est maintenant
+  authentiquement indépendante, aucune hypothèse de comptage égal.
+
+**Vérifié structurellement contre `usd-core`** : simulé le calcul de
+plage combinée à l'étage 1 avec des positions volontairement différentes
+par composante (`red` 0-100, `green` 20-140, `blue` 50-90, `alpha` 0-0),
+confirmé `<color>` combiné = `minPos=0.0`/`maxPos=140.0` (l'union). Puis
+reconstruit le graphe complet de l'étage 3 : les trois `normalize`
+(`ND_remap_float`) portent bien tous `inlow=0`/`inhigh=140` (identiques,
+pas la plage propre de chaque composante), les positions de clé de chaque
+composante sont correctement normalisées contre cette plage partagée
+(ex. `red` à pos=100 -> `x=100/140≈0.714`, `green` à pos=20 -> `x=20/140≈
+0.143`), et `combine` recombine bien les trois sorties `outr` de chaque
+`separate` en un seul `color3f`. 123 tests pytest toujours verts (aucun ne
+couvre ce chemin, dépendant de Modo pour l'étage 1).
+
+**Pas testé dans Modo/Houdini** - mêmes réserves que les Rounds 43-46.
+
+#### Round 48, connexion `Gradient_incidenceAngle` -> `Gradient_Gradient` invisible dans Houdini — CORRIGÉ (2026-08-12)
+
+Premier test réel dans Houdini de la structure à 2 `NodeGraph` du Round 44 :
+l'auteur importe et constate que la sortie du `NodeGraph` `Gradient_incidenceAngle`
+n'est **pas** connectée à l'input `x` de `Gradient_Gradient` - le fil n'apparaît
+pas dans l'éditeur de graphe de matériau.
+
+Cause identifiée par comparaison avec le reste du fichier : cette connexion
+était la **seule** de tout `ShaderTree.py` où la sortie exposée d'un
+`NodeGraph` (`nodeGraph.CreateOutput('out', ...)`) alimente directement
+l'input d'un **autre** `NodeGraph` (`nodeGraph.CreateInput('x',
+...).ConnectToSource(driverOutput)`, avec `driverOutput = nodeGraph.GetOutput("out")`
+du driver). Partout ailleurs où un `NodeGraph` reçoit une donnée de
+l'extérieur, la source est la sortie d'un vrai `Shader` - jamais celle d'un
+autre `NodeGraph` : `_USD_create_UV_transform`'s input `"texcoord"` est
+alimenté par `ND_geompropvalue_vector2` (un `Shader`), confirmé fonctionner
+dans Houdini depuis les Rounds 13/14. Cohérent avec plusieurs précédents
+déjà documentés dans ce fichier (Round 3 : `ND_texcoord_vector2`/
+`UsdPrimvarReader_float2` ne se résolvaient pas non plus comme source à
+l'intérieur d'un graphe mtlx compilé) - la traduction MaterialX-vers-Hydra
+de Houdini semble ne pas résoudre de façon fiable une connexion directe
+sortie-de-NodeGraph -> entrée-de-NodeGraph entre deux `NodeGraph` frères,
+même si c'est parfaitement valide en USD pur (vérifié à nouveau contre
+`usd-core`, aucune erreur, structure cohérente).
+
+Corrigé dans `_USD_create_gradient_driver` (`ShaderTree.py`) : la fonction
+retourne maintenant directement la sortie du dernier `Shader` de la chaîne
+(`degreesOutput`, le nœud `multiply`) au lieu de `nodeGraph.GetOutput("out")`.
+Le `NodeGraph` `Gradient_incidenceAngle` garde sa propre sortie `outputs:out`
+posée et connectée en interne (utile pour l'inspection/regroupement visuel
+dans l'éditeur de graphe d'un DCC) - elle n'est simplement plus ce que
+`_USD_create_gradient_output` utilise pour câbler l'input `"x"` de
+`Gradient_Gradient`. Les deux `NodeGraph` demandés par l'auteur au Round 44
+restent en place, seule la cible réelle de la connexion change.
+
+**Vérifié structurellement contre `usd-core`** : reconstruit la chaîne
+complète, confirmé via `UsdShade.Input.GetConnectedSource()` que
+`Gradient_Gradient.inputs:x` pointe maintenant vers le prim `Shader`
+`Gradient_incidenceAngle/multiply` (pas vers le prim `NodeGraph`
+`Gradient_incidenceAngle` lui-même). 123 tests pytest toujours verts.
+
+**Pas encore reconfirmé dans Houdini** - la correction elle-même n'a pas
+encore été retestée par un nouvel export/import, seul le bug d'origine a
+été confirmé par l'auteur.
+
+#### Round 49, les 2 `NodeGraph` (driver + rampe) fusionnés en un seul — CORRIGÉ, PAS ENCORE RETESTÉ DANS HOUDINI (2026-08-12)
+
+Retest du Round 48 dans Houdini : l'auteur signale que les nœuds de la
+chaîne `incidenceAngle` ne sont plus regroupés dans leur propre
+`NodeGraph` du tout - Houdini les a "aplatis" hors de `Gradient_incidenceAngle`.
+
+Cause : le fix du Round 48 faisait toujours pointer `Gradient_Gradient.inputs:x`
+vers un nœud **interne** à `Gradient_incidenceAngle` (`.../multiply`), en
+traversant sa frontière depuis un `NodeGraph` frère complètement séparé -
+un cas de figure différent de `_USD_create_UV_transform`'s `"texcoord"`
+(alimenté par `ND_geompropvalue_vector2`, un `Shader` qui n'est **enveloppé
+dans aucun `NodeGraph`** - un simple prim frère). En comparant les deux
+cas, la règle qui se dégage de tout ce qui fonctionne réellement dans ce
+fichier : referencer un `Shader` depuis l'extérieur ne pose problème que
+si ce `Shader` est encapsulé dans un **second** `NodeGraph` distinct -
+Houdini semble alors "casser" cette encapsulation (en aplatissant) plutôt
+que de simplement résoudre la connexion. Aucune des deux tentatives
+(Round 44 : référencer la sortie déclarée du second `NodeGraph` ; Round 48 :
+référencer un nœud interne du second `NodeGraph`) n'a survécu intacte à la
+traduction MaterialX-vers-Hydra de Houdini - le problème de fond est
+d'avoir **deux** `NodeGraph` de haut niveau qui se référencent l'un
+l'autre, pas le choix précis de la cible référencée.
+
+Corrigé en fusionnant les deux `NodeGraph` en un seul : `_USD_create_gradient_driver`
+ne crée plus son propre `NodeGraph` - ses 5 nœuds (`normal`/`viewdirection`/
+`dotproduct`/`acos`/`multiply`) sont maintenant posés directement sous le
+`path` passé par l'appelant (imbriqués dans un sous-espace `<path>/incidenceAngle/...`,
+même convention de nommage que les sous-espaces `red`/`green`/`blue`/`value`
+déjà utilisés pour les rampes). `_USD_create_gradient_output` crée
+maintenant le `NodeGraph` "_Gradient" **avant** d'appeler le driver, et lui
+passe son propre chemin - driver et rampes vivent donc tous les deux à
+l'intérieur du même unique `NodeGraph`. La connexion `remap.inputs:in` (dans
+`_USD_create_gradient_channel_ramp`, renommé `xInput`->`driverOutput` pour
+refléter que ce n'est plus un input d'interface mais la sortie brute du
+`Shader` driver) devient une connexion `Shader`-vers-`Shader` purement
+interne au `NodeGraph`, exactement comme le chaînage des segments de rampe
+entre eux (déjà éprouvé) - plus aucune frontière de `NodeGraph` à
+traverser à l'intérieur. Seule la sortie finale du `NodeGraph` (posée sur
+`nodeGraph.outputs:out`, consommée par le shader `standard_surface` via
+`_USD_add_shader_connector_to_context`) reste une frontière traversée -
+et c'est exactement le patron `NodeGraph`-sortie -> `Shader`-entrée déjà
+éprouvé partout ailleurs (`UV_Transform`, Round 4-18).
+
+**Vérifié structurellement contre `usd-core`** : reconstruit la chaîne
+complète, confirmé qu'un seul prim `NodeGraph` existe sur tout le stage,
+que `remap.inputs:in` pointe vers `.../incidenceAngle/multiply` (un
+`Shader`, connexion purement interne au même `NodeGraph`), et que la
+sortie externe du `NodeGraph` pointe vers `.../value/separate` (un
+`Shader`, le patron déjà éprouvé). 123 tests pytest toujours verts.
+
+**Pas encore retesté dans Houdini** - deux tentatives précédentes (Round
+44, Round 48) ont chacune paru correctes contre `usd-core` mais ont
+échoué une fois testées en conditions réelles ; cette fusion en un seul
+`NodeGraph` élimine la classe de problème identifiée (deux `NodeGraph` se
+référençant l'un l'autre), mais reste à confirmer par un vrai
+export/import avant de la considérer close.
+
+#### Round 50, `ND_ramp_gradient` diagnostiqué comme n'évaluant pas dans Karma + remplacé par un seul `ND_ramplr_float` par canal (2026-08-12)
+
+Le Round 49 a corrigé la structure du graphe (un seul `NodeGraph`,
+confirmé par capture d'écran de l'éditeur "Edit Material" de Houdini :
+`normal`/`viewdirection`/`dotproduct`/`acos`/`multiply` alimentent bien
+les 3 `normalize` (un par canal), chacun sa propre chaîne de
+`ramp_gradient`, `separate`, jusqu'à `combine` → `out`) - **mais le rendu
+restait un rond blanc/chrome sans aucune couleur**, fond noir au lieu de
+vert sur le stencil. Diagnostic par bissection, fait par l'auteur
+directement dans Houdini :
+
+1. Remplacer l'entrée de `normalize` (driver) par une constante littérale
+   (`1.0`) sur les 3 canaux → **aucun changement** dans le rendu. Élimine
+   la chaîne `normal`/`viewdirection`/`dotproduct`/`acos`/`multiply` comme
+   coupable.
+2. Câbler 3 constantes littérales différentes (`0.5`/`0.772`/`0.192`)
+   directement sur `combine.in1/in2/in3` (court-circuitant tout le reste,
+   `ramp_gradient`+`separate` compris) → **rendu vert-jaune correctement
+   visible**, confirmant que `combine` → `out` → `bound_out` → `diffColor`
+   fonctionne bien dans Karma.
+
+Les deux tests combinés isolent le problème à la chaîne `ramp_gradient`/
+`separate4` elle-même - **`ND_ramp_gradient` (ou `ND_separate4_color4`)
+n'évalue pas correctement dans Karma**, malgré un graphe structurellement
+valide (vérifié à plusieurs reprises contre `usd-core`) et visible/éditable
+dans l'éditeur de graphe de matériau de Houdini (l'éditeur n'a besoin que
+du nodedef pour dessiner un nœud, pas d'une implémentation shader
+fonctionnelle derrière - donc un graphe qui *a l'air* correct dans
+l'éditeur ne garantit pas qu'il s'évalue). Cohérent avec la classe de
+limite déjà rencontrée pour `mirror`/`constant` (wrap modes, Round 11/17) -
+un nœud valide selon la spec MaterialX mais dont le support réel côté
+Houdini/Karma n'est pas garanti.
+
+**Solution proposée par l'auteur, plutôt que de creuser plus loin lequel
+des deux nœuds est en cause** : remplacer la chaîne de `ND_ramp_gradient`
+par un **unique** `ND_ramplr_float` par canal - une rampe gauche-droite à
+2 points seulement (`valuel`/`valuer`, interpolés linéairement selon
+`texcoord.x`, vérifié dans le vrai `mx_ramplr_float.glsl` du stdlib :
+`mix(valuel, valuer, clamp(texcoord.x, 0, 1))`), en ne gardant que la
+**première et la dernière** clé de chaque canal (les clés intermédiaires
+sont perdues) - compromis explicitement accepté par l'auteur pour
+avancer. Contrairement à `ND_ramp_gradient`/`ND_ramp` (tous deux figés en
+sortie `color4`, Round 43), `ND_ramplr_float` a une vraie sortie `float` -
+plus besoin de `ND_separate4_color4` pour en extraire un scalaire.
+
+Implémenté (`ShaderTree.py`) :
+- `_USD_create_ramp_gradient_chain`/`_USD_convert_gradient_output`
+  (chaîne `ramp_gradient` + extraction `separate4`) supprimées, remplacées
+  par `_USD_create_gradient_ramp` : construit `texcoord` (`ND_combine2_vector2`,
+  empaquette la sortie normalisée du driver en `vector2`, `y` inutilisé)
+  puis un seul `ND_ramplr_float` (`valuel`/`valuer` = valeur de la
+  première/dernière clé, triées par position). `_USD_create_gradient_channel_ramp`
+  simplifiée en conséquence (plus d'appel à `_USD_convert_gradient_output`,
+  la sortie de `_USD_create_gradient_ramp` est déjà un `Float`).
+  `MODO_SLOPE_TYPE_TO_MTLX_INTERPOLATION` (Round 43) supprimée - `ND_ramplr_float`
+  n'a pas d'input d'interpolation, la table n'a plus de consommateur.
+- **Canal alpha ajouté**, sur demande explicite de l'auteur ("it may be
+  important") : `_USD_create_gradient_output` construit maintenant 4
+  rampes indépendantes (red/green/blue/alpha, toutes normalisées contre
+  le même `minPos`/`maxPos` combiné de `<color>`, Round 47 inchangé) et
+  les recombine via `ND_combine4_color4` (au lieu de `ND_combine3_color3`)
+  en un `color4f`. Comme aucun effet réel n'a `Color4f` comme
+  `usdTypeMap` cible aujourd'hui, un pont `ND_separate4_color4` +
+  `ND_combine3_color3` (même mécanisme déjà éprouvé Round 28/33) réduit
+  ce résultat à `Color3f` pour le cas réel actuel - alpha est donc bien
+  calculé et alimente `combine`, mais reste actuellement jeté juste après
+  faute de consommateur `Color4f`. Le chemin `Color4f` direct (si
+  `targetType` en demandait un un jour) est géré sans ce pont.
+
+**Vérifié structurellement contre `usd-core`** : reconstruit le graphe
+complet avec des clés de test différentes par canal (red 0→100, green
+20→140, blue 50→90, alpha à une seule clé) - chaque `ND_ramplr_float`
+porte bien `valuel`/`valuer` égaux à la valeur de la première/dernière
+clé de son propre canal (alpha, un seul point, se réduit correctement à
+`valuel == valuer`, un canal plat), et la chaîne `combine4` → `separate4`
+→ `combine3` → `Color3f` reste type-cohérente de bout en bout. 123 tests
+pytest toujours verts.
+
+**Pas encore testé en rendu réel** - cette approche est elle-même un test
+diagnostique pour confirmer que le problème est bien spécifique à
+`ND_ramp_gradient`/`ND_separate4_color4`, pas une hypothèse déjà
+confirmée. Si `ND_ramplr_float` rend correctement, la perte des clés
+intermédiaires (compromis accepté) devient le point à réévaluer ensuite -
+si le nombre de clés réel dépasse 2 dans des cas d'usage courants, une
+piste alternative (bake en LUT image, déjà envisagée en "Prochaines
+étapes possibles") resterait à explorer pour retrouver la fidélité perdue
+sans dépendre de `ND_ramp_gradient`.
+
+**Rendu après ce round (capture d'écran fournie par l'auteur)** : toujours
+aucune couleur - la sphère principale rend maintenant en **noir uni**
+(différent du blanc/chrome du Round 49, mais toujours pas la couleur
+attendue). Piste non encore creusée à ce stade : `ND_ramplr_float`'s
+défaut de sortie est `0.0` (donc noir si jamais évalué) - un échec total
+tomberait sur ce défaut, cohérent avec le noir observé. `ND_ramp_gradient`
+**et** `ND_ramplr` partagent le même `nodegroup="procedural2d"` dans le
+stdlib MaterialX - possible indice que la limite de Karma concerne toute
+cette famille de nœuds, pas spécifiquement `ND_ramp_gradient`. Pas encore
+investigué plus loin à ce round - voir Round 51.
+
+#### Round 51, `normalize`/`texcoord` mutualisés entre canaux (2026-08-12)
+
+En inspectant le graphe réel importé dans Houdini (capture d'écran de
+l'éditeur "Edit Material"), l'auteur repère une redondance : puisque
+`red`/`green`/`blue`/`alpha` normalisent tous contre le **même**
+`minPos`/`maxPos` combiné de `<color>` (Round 47), les 4 paires
+`normalize`(`ND_remap_float`)/`texcoord`(`ND_combine2_vector2`) construites
+une par canal (Round 50) étaient strictement identiques - Houdini les
+affichait d'ailleurs comme un seul nœud partagé en pratique (la capture
+montre un seul `normalize` alimentant les 4 chaînes `texcoord`/`ramp`) une
+fois le graphe flatteni/dédupliqué à l'import.
+
+Corrigé (`ShaderTree.py`) : nouvelle fonction `_USD_create_gradient_texcoord`
+(construit le `normalize`+`texcoord` **une seule fois**, à l'échelle du
+`NodeGraph` `_Gradient` entier, pas par canal) ; `_USD_create_gradient_ramp`
+simplifiée pour ne plus prendre qu'un `texcoordOutput` déjà construit (au
+lieu de le reconstruire lui-même) et ne bâtir que le nœud `ramp`
+(`ND_ramplr_float`) propre à son canal. `_USD_create_gradient_channel_ramp`
+(le wrapper par-canal du Round 47/50, devenu un simple relais une fois
+`normalize`/`texcoord` extraits) supprimée - `_USD_create_gradient_output`
+appelle directement `_USD_create_gradient_texcoord` une fois puis
+`_USD_create_gradient_ramp` une fois par canal (`value`, ou
+`red`/`green`/`blue`/`alpha`), toutes partageant la même sortie `texcoord`.
+Comportement/valeurs strictement identiques - purement une déduplication
+de nœuds, aucun calcul ne change.
+
+**Vérifié structurellement contre `usd-core`** : reconstruit le graphe
+avec 4 canaux à positions de clé différentes - confirmé qu'un seul prim
+`normalize` et un seul prim `texcoord` existent sur tout le stage, et que
+les 4 nœuds `ramp` (un par canal) sourcent tous leur `texcoord` depuis ce
+même nœud partagé. 123 tests pytest toujours verts.
+
+**Toujours pas de couleur dans le rendu réel** (point ouvert du Round 50,
+inchangé par cette déduplication purement structurelle) - à investiguer
+si `ND_ramplr_float` s'avère lui aussi ne pas s'évaluer dans Karma.
+
+#### Round 52, `ND_ramplr_float` confirmé lui aussi inerte dans Karma + remplacé par `ND_hinvlinear_float`/`ND_huniformramp_float` (nœuds Houdini) — IMPLÉMENTÉ, PAS ENCORE TESTÉ (2026-08-12)
+
+Retest du Round 51 dans Houdini par l'auteur : toujours un rendu noir uni,
+confirmant l'hypothèse posée en fin de Round 50 - `ND_ramplr_float` (comme
+`ND_ramp_gradient`) ne s'évalue pas dans Karma. Les deux nœuds partagent
+le même `nodegroup="procedural2d"` du stdlib MaterialX - deuxième nœud de
+cette famille à échouer, renforçant l'hypothèse que la limite touche toute
+la catégorie `procedural2d`, pas un nœud isolé.
+
+L'auteur a testé d'autres nœuds directement dans Houdini et trouvé une
+paire qui fonctionne : **`ND_hinvlinear_float`** → **`ND_huniformramp_float`**
+- des définitions MaterialX **propres à Houdini** (préfixe `h`), absentes
+du paquet `MaterialX` standalone installé dans `.venv` - impossible de les
+vérifier contre le vrai nodedef comme d'habitude dans ce fichier ;
+implémenté strictement sur la base du câblage décrit par l'auteur (testé
+par lui dans Houdini, pas une supposition) :
+
+- `ND_hinvlinear_float` : `inputs:ramp` (la valeur pilote, normalisée
+  [0,1]) → `inputs:num` (nombre de clés) → `inputs:key0..key9` (position
+  de chaque clé, jusqu'à 10) → `outputs:out`.
+- `ND_huniformramp_float` : `inputs:ramp` (connecté à la sortie de
+  `hinvlinear`) → `inputs:num` → `inputs:value0..value9` (valeur de
+  chaque clé) → `outputs:out`.
+
+Contrairement à `ND_ramplr_float` (2 points seulement, positions des clés
+ignorées - Round 50), cette paire consomme **toutes** les positions et
+valeurs réelles (jusqu'à 10 clés) - la perte de fidélité du Round 50 est
+donc annulée, sans avoir besoin d'une piste LUT/image.
+
+Implémenté (`ShaderTree.py`) :
+- `_USD_create_gradient_texcoord` renommée `_USD_create_gradient_normalize`
+  et simplifiée : ne construit plus que le `ND_remap_float` partagé (Round
+  51 inchangé sur ce point) - le `ND_combine2_vector2`/"texcoord" du Round
+  50 est retiré, `hinvlinear.inputs:ramp` étant un simple `float`, pas un
+  `vector2` comme `ramplr.inputs:texcoord`. Le garde `maxPos == minPos`
+  (span dégénéré) déplacé dans `_USD_create_gradient_output` (calculé une
+  fois, avant d'appeler `_USD_create_gradient_normalize` **et**
+  `_USD_create_gradient_ramp` - les deux ont besoin de la même valeur
+  gardée).
+- `_USD_create_gradient_ramp` réécrite : lit les vraies clés du canal
+  (`_USD_read_gradient_keys`, inchangée), les normalise en `[0,1]` contre
+  `minPos`/`maxPos` (logique du Round 47, réintroduite - devenue inutile
+  au Round 50 puisque `ramplr` n'utilisait que la première/dernière
+  valeur, à nouveau nécessaire ici puisque chaque position compte),
+  plafonne à 10 clés avec un diagnostic (`_DEBUG_diag("Unsupported",
+  "Gradient_KeyCount", ...)`, même convention que les autres limites
+  connues de ce fichier) si dépassé, puis construit la paire
+  `hinvlinear`→`huniformramp` avec `key0..key9`/`value0..value9` posés en
+  boucle.
+
+**Vérifié structurellement contre `usd-core`** : reconstruit la chaîne
+avec un canal à 3 clés (0/50/100, sur un span combiné 0-140) - confirmé
+que les 3 positions **et** les 3 valeurs sont toutes présentes et
+correctement normalisées (`key0=0`, `key1=0.357≈50/140`,
+`key2=0.714≈100/140`, `value0=1`/`value1=0.5`/`value2=0`) - contrairement
+au Round 50/51 qui n'aurait gardé que `key0`/`key2` (deux points, milieu
+perdu). 123 tests pytest toujours verts (aucun ne couvre ce chemin,
+dépendant de Modo pour l'étage 1).
+
+**Pas encore testé dans Houdini** - ces deux nœuds `h*` n'ont jamais été
+essayés par ce kit avant que l'auteur ne les découvre en session ; le
+câblage suit exactement sa description mais reste à confirmer une fois
+réexporté. Si ça fonctionne, ça referme le sujet ouvert depuis le Round
+43 (limite de `ND_ramp_gradient` à un nombre de clés arbitraire) sans
+avoir eu besoin de la piste LUT/image envisagée en repli.
+
+#### Round 53, canal alpha retiré + `combine4`/`separate4` supprimés (2026-08-12)
+
+L'auteur demande de simplifier : trop de choses changées à la fois ces
+derniers rounds. Le canal alpha (Round 50 : ramp dédiée + `ND_combine4_color4`
++ `ND_separate4_color4`/`ND_combine3_color3` pour le ramener en `Color3f`,
+seul target réel aujourd'hui) est retiré entièrement - inutile tant
+qu'aucun effet ne consomme un `Color4f` (confirmé via `usdTypeMap`, déjà
+noté sans conséquence au Round 50). Les sorties `red`/`green`/`blue`
+(`ND_huniformramp_float`, Round 52) alimentent maintenant directement
+`ND_combine3_color3` - plus de `combine4`/`separate4` intermédiaires.
+
+Implémenté (`ShaderTree.py`, branche `else` de `_USD_create_gradient_output`) :
+`alphaOutput`/`colorXml.find('alpha')` retirés ; `combine` redevient un
+unique `ND_combine3_color3` avec `in1`/`in2`/`in3` connectés directement
+aux 3 sorties `ND_huniformramp_float` ; le bloc `Color4f`/`separate4`/
+`dropAlpha` du Round 50 supprimé entièrement (plus de branche
+`targetType == Color4f` à gérer - `_USD_create_gradient_output` ne
+produit plus que du `Float`/`Color3f`, les deux seuls cas réels).
+
+**Vérifié structurellement contre `usd-core`** : reconstruit le graphe
+complet (3 canaux, positions de clé différentes par canal) - confirmé
+qu'aucun `ND_combine4_color4`/`ND_separate4_color4` n'apparaît nulle part
+sur le stage, et que `combine` (`ND_combine3_color3`, un seul exemplaire)
+est connecté directement aux 3 sorties `ramp`. 123 tests pytest toujours
+verts.
+
+**Pas encore testé dans Houdini** - même statut que le Round 52 (le
+câblage `hinvlinear`/`huniformramp` lui-même reste à confirmer en rendu
+réel ; ce round est une simplification structurelle qui ne change aucun
+calcul par ailleurs).
+
+#### Round 54, traduction USD/mtlx des Gradients abandonnée - retour à l'étage 1 seul (2026-08-12)
+
+Retest du Round 53 dans Houdini : toujours un rendu noir uni. Trois
+familles de nœuds mtlx essayées pour porter la rampe (`ND_ramp_gradient`
+chaîné, Round 43 ; `ND_ramplr_float`, Round 50 ; `ND_hinvlinear_float`/
+`ND_huniformramp_float`, Round 52), toutes structurellement correctes
+(vérifiées à chaque fois contre `usd-core`) et toutes sans effet visible
+dans Karma. L'auteur tranche : voie sans issue pour l'instant, ne pas
+continuer à chercher un quatrième nœud - revenir à l'état d'avant le
+Round 43, où les couches `Gradient` n'étaient extraites que dans le XML
+normalisé (étage 1), sans aucune tentative de traduction USD/mtlx (étage
+3).
+
+Retiré de `ShaderTree.py` :
+- La branche `elif elementName == "gradient":` dans `_USD_export_shadertree`
+  (câblait `_USD_create_gradient_output` dans le graphe mtlx réel) -
+  supprimée. Une couche `Gradient` dans le shader tree ne produit donc à
+  nouveau **rien** côté USD - silencieusement ignorée par la boucle
+  `for child in xml.findall('*')`, comme documenté avant le Round 43.
+- Les 5 fonctions de construction USD des Rounds 43-53 : `_USD_create_gradient_driver`,
+  `_USD_read_gradient_keys`, `_USD_create_gradient_normalize`,
+  `_USD_create_gradient_ramp`, `_USD_create_gradient_output` - supprimées
+  entièrement (pas laissées en code mort).
+
+**Conservé intact** - tout l'étage 1 (extraction XML, Rounds 37-42) : `_UTIL_sample_gradient`,
+`_UTIL_get_gradient_keys`, `_UTIL_get_slope_type_name`,
+`_UTIL_gradient_keys_to_xml_dicts`, `_UTIL_set_key_pos_range`, le
+traitement `iCHANTYPE_GRADIENT` dans `_UTIL_format_channel`/
+`_UTIL_format_channel_value`, le suivi du graphe `sGRAPH_SHADELOC` pour
+`sITYPE_GRADIENT` dans `_XML_export_item`, et le calcul `minPos`/`maxPos`
+(par groupe et combiné) dans `_XML_get_channels` (Rounds 46/47). Une
+couche `Gradient` continue donc à produire un XML normalisé fidèle -
+vraies clés, positions, valeurs, type d'interpolation, `minPos`/`maxPos` -
+exactement comme avant le chantier étage 3, cohérent avec le principe déjà
+établi dans ce fichier que la fidélité d'extraction à l'étage 1 est une
+valeur en soi, indépendante de ce qui est fait (ou pas) ensuite avec cette
+donnée.
+
+123 tests pytest toujours verts (aucun ne couvrait le chemin USD des
+Rounds 43-53, tous dépendants de Modo/`fnpxr`).
+
+**Point ouvert, pas résolu** : aucune des 3 familles de nœuds essayées ne
+fonctionne dans Karma pour porter une rampe pilotée par une valeur
+procédurale (`incidenceAngle`) - reste à déterminer si c'est spécifique à
+la combinaison driver procédural + nœud de rampe, ou si Karma a un
+problème plus large avec ces nœuds. Piste non essayée : la sortie d'une
+rampe alimentée par une source **texture-based** (`UsdUVTexture`/coord
+UV réelles) plutôt que procédurale - pourrait démêler si le problème vient
+du nœud de rampe lui-même ou de sa combinaison avec `viewdirection`/
+`normal`. Piste alternative déjà envisagée (bake en LUT image, voir
+"Prochaines étapes possibles") reste la plus prometteuse si ce chantier
+reprend un jour - elle contourne entièrement la question de savoir quel
+nœud de rampe procédural Karma supporte, en s'appuyant sur `ND_image`
+(déjà éprouvé extensivement dans ce kit) plutôt que sur un nœud de rampe
+dédié.
+
+#### Round 55, nettoyage général post-Round 54 : code mort et commentaires périmés retirés (2026-08-12)
+
+Demande explicite de l'auteur après l'abandon du chantier Gradient étage 3 :
+passe de nettoyage sur tout `ShaderTree.py` - commentaires à jour, code
+mort retiré. Fait par comptage d'occurrences de chaque `def` top-level
+dans le fichier (une seule occurrence = jamais appelée ailleurs que sa
+propre définition = candidate morte), puis vérification au cas par cas.
+
+Retiré :
+- **`_UTIL_remove_chars`** - jamais appelée nulle part (ni dans ce
+  fichier, ni ailleurs dans `Scripts/`) ; `_UTIL_clean_name` utilise
+  `_UTIL_replace_chars` (remplacement par chaîne vide) pour le même
+  effet depuis le début - `_UTIL_remove_chars` a toujours été redondante.
+- **`xrange`/`long`** (bloc de compatibilité Python 2, tête de fichier) -
+  jamais référencés ailleurs dans le fichier (`basestring`, dans le même
+  bloc, reste utilisé à 2 endroits réels - conservé).
+- Bloc de code mort en commentaire dans `_USD_create_texture_output`
+  (choix d'`outType` selon le format de fichier texture - `PNG`/`TGA`/
+  `EXR`) - jamais activé, `outType` est de toute façon déjà un vrai
+  paramètre passé par l'appelant (documenté dans le docstring de la
+  fonction) depuis longtemps.
+- Docstring placeholder jamais rempli (`"""_summary_ ... _description_
+  ..."""`) sur `_UTIL_clean_name` - un commentaire une-ligne juste
+  au-dessus décrit déjà correctement la fonction.
+- Deux commentaires devenus faux après le Round 54 dans `_XML_get_channels`
+  (calcul de `minPos`/`maxPos`) : mentionnaient encore "lets stage 3
+  normalize into ND_ramp_gradient's [0,1] domain" / "stage 3 normalizes
+  every group against this SAME shared span" - l'étage 3 gradient
+  n'existe plus, ces phrases décrivaient une consommation qui a disparu.
+  Recoupés pour ne garder que le "quoi" (toujours vrai : ces attributs
+  sont posés pour la fidélité de l'extraction), plus le pointeur vers le
+  round CLAUDE.md concerné.
+
+**Vérifié** : aucun autre `def` top-level du fichier n'a une seule
+occurrence (hormis `export_basic_execute`, le point d'entrée public
+appelé depuis `ExportShaderTree.py`, hors de ce fichier - confirmé par
+grep). 123 tests pytest toujours verts, fichier toujours syntaxiquement
+valide (`ast.parse`).
+
+**Pas touché délibérément** : les docstrings Google-style verbeux mais
+**exacts** de plusieurs fonctions plus anciennes (`_JSON_export_item`,
+`_USD_export_shadertree`, `_USD_add_shader_connector_to_context`...) -
+verbeux au regard de la convention "une ligne, le quoi" adoptée plus tard
+dans le fichier (Round 16), mais pas faux/périmés comme les deux
+commentaires ci-dessus - une réécriture systématique de style n'a pas été
+demandée et aurait été un diff large à faible valeur ajoutée par rapport
+au risque d'en altérer le sens par erreur.
 
 ### Limites connues, acceptées (pas d'équivalent natif dans le catalogue de preview de Storm)
 
@@ -2727,9 +3660,11 @@ l'effort d'un sérialiseur `.mtlx` maison vaut le besoin réel à ce moment-là"
 
 0. **PRIORITAIRE** : voir le paragraphe "PRIORITAIRE pour la prochaine
    session (2026-08-12)" en tête de fichier - re-exporter
-   "PF_ShaderBall_base" et confirmer les Rounds 28-40 (rien retesté en
-   conditions réelles depuis le Round 28), en particulier les couches
-   `Gradient` (Rounds 37-40) et `vectorDisplace` (Round 36).
+   "PF_ShaderBall_base" et confirmer les Rounds 28-36 (rien retesté en
+   conditions réelles depuis le Round 28), en particulier `vectorDisplace`
+   (Round 36). Les couches `Gradient` (Rounds 37-42) restent confirmées à
+   l'étage 1 (XML) seulement - voir item 7 ci-dessous pour l'étage 3,
+   abandonné au Round 54.
 
 Le reste, aucune urgence, à discuter avec l'auteur :
 
@@ -2758,21 +3693,26 @@ Le reste, aucune urgence, à discuter avec l'auteur :
    `normalize/colorspace.py` (qui a déjà accès à `usdInputName`/
    `usdPreviewInputName` via `normalize_effect_channel_names`, exécutée
    avant elle) plutôt que dupliqué dans `ShaderTree.py`.
-7. **Traduction USD/mtlx des couches `Gradient`** (Rounds 37-40 ont fait
-   l'étage 1 seulement - extraction XML des vraies clés/valeurs/type
-   d'interpolation, rien côté USD). MaterialX n'a pas de nœud de rampe
-   générique à N clés arbitraires dans son stdlib (seulement des formes
-   fixes à 2-4 points : `ramp4`/`ramplr`/`ramptb`/`splitlr`/`splittb`) -
-   la piste envisagée en discussion est de "baker" chaque gradient en une
+7. **Traduction USD/mtlx des couches `Gradient`** - l'étage 1 (extraction
+   XML des vraies clés/valeurs/type d'interpolation/`minPos`/`maxPos`,
+   Rounds 37-42) reste en place et fonctionne. L'étage 3 (construction
+   USD/mtlx, Rounds 43-53) a été **tenté puis abandonné au Round 54** :
+   trois familles de nœuds de rampe essayées (`ND_ramp_gradient` chaîné,
+   `ND_ramplr_float`, `ND_hinvlinear_float`/`ND_huniformramp_float` -
+   ces deux derniers propres à Houdini) se sont toutes révélées
+   structurellement correctes (vérifiées contre `usd-core` à chaque fois)
+   mais sans effet visible dans un rendu Karma réel. Piste la plus
+   prometteuse pour une reprise future : "baker" chaque gradient en une
    petite texture LUT 1D à l'export (échantillonner via les vraies clés,
-   pas `Generate(t)`) plutôt que d'essayer de reconstruire des nœuds
-   stdlib pour un nombre de clés arbitraire. Reste aussi à mapper `param`
-   (l'Input Parameter Modo, ex. `"distanceX"`) vers le nœud géométrique
-   mtlx correspondant (`<position>`, etc.) - liste complète des valeurs
-   possibles de `param` pas encore connue (une seule vue, `"distanceX"`).
-   Scripts de diagnostic Modo utilisés pour cette investigation dans
-   `explore_tools/` (gitignoré, hors `.lpk`) - utile comme référence si
-   `slopeType`/`weighted` ou `param` ont besoin d'être creusés davantage.
+   pas `Generate(t)`) et la lire via `ND_image` (déjà éprouvé
+   extensivement dans ce kit) plutôt que de dépendre d'un nœud de rampe
+   procédural dont le support dans Karma reste incertain. Reste aussi à
+   mapper `param` (l'Input Parameter Modo, ex. `"distanceX"`) au-delà du
+   seul `"incidenceAngle"` déjà traité - liste complète des valeurs
+   possibles pas encore connue. Scripts de diagnostic Modo utilisés pour
+   cette investigation dans `explore_tools/` (gitignoré, hors `.lpk`) -
+   utile comme référence si `slopeType`/`weighted` ou `param` ont besoin
+   d'être creusés davantage.
 
 Ne pas réintroduire de logique de cas particulier dans la construction USD —
 c'est précisément ce que cette refonte cherchait à éviter.
