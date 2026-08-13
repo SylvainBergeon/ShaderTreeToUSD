@@ -56,6 +56,10 @@ class ShadingContext:
     # that effect - true cross-layer blending isn't representable in Storm's fixed preview node
     # catalog, so "last layer wins" is the closest approximation. Reset per mask, alongside effectsStack.
     previewOutputs:dict = {}
+    # effectName ("displace"/"vectorDisplace") -> displacementshader UsdShade.Output. Both target the
+    # material's single mtlx:displacement output, so they're combined by _USD_connect_displacement_outputs
+    # instead of each independently overwriting it - see CLAUDE.md Round 36 (combine). Reset per mask.
+    displacementOutputs:dict = {}
 
 class shaderConnector:
     name:str
@@ -564,6 +568,7 @@ def _USD_export_shadertree(stage:Usd.Stage, path:str, context:ShadingContext, xm
             #-------------------------------------------------------- Reset stacks
             context.effectsStack = OrderedDict()
             context.previewOutputs = {}
+            context.displacementOutputs = {}
 
             #-------------------------------------------------------- Restore: this mask's material must not
             #-------------------------------------------------------- leak into siblings or the enclosing mask
@@ -864,7 +869,40 @@ def _USD_connect_effect_stack(stage:Usd.Stage, context:ShadingContext, path:str,
         #---------------------------------------------------- Connect the latest exposed output to the shader input corresponding to the current effect
         _USD_connect_texture_output_to_shader_input(stage, context, effectName, output, name)
 
+    #----------------------------------------------------- displace/vectorDisplace both target the material's single
+    #----------------------------------------------------- mtlx:displacement output - combine and connect once here
+    _USD_connect_displacement_outputs(stage, context)
+
     return output
+
+# Combine displace/vectorDisplace shader outputs into the material's single mtlx:displacement output
+def _USD_connect_displacement_outputs(stage:Usd.Stage, context:ShadingContext):
+    """
+    material.outputs:mtlx:displacement can only be connected once. If both a scalar "displace"
+    layer and a "vectorDisplace" layer are present on the same material, their displacementshader
+    outputs are combined with ND_mix_displacementshader (mix=0.5) instead of one silently
+    overwriting the other - MaterialX has no add_displacementshader, mix(0.5) is the closest
+    approximation to Modo's additive-looking behavior here - see CLAUDE.md Round 36 (combine).
+    """
+    material:UsdShade.Material = context.material
+    displacementOutputs = context.displacementOutputs
+
+    if not displacementOutputs:
+        return
+
+    outputs = list(displacementOutputs.values())
+    combined = outputs[0]
+
+    if len(outputs) > 1:
+        path:Path = material.GetPath().AppendPath("Displacement_mix")
+        mixShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+        mixShader.CreateIdAttr("ND_mix_displacementshader")
+        mixShader.CreateInput("fg", Sdf.ValueTypeNames.Token).ConnectToSource(outputs[0])
+        mixShader.CreateInput("bg", Sdf.ValueTypeNames.Token).ConnectToSource(outputs[1])
+        mixShader.CreateInput("mix", Sdf.ValueTypeNames.Float).Set(0.5)
+        combined = mixShader.CreateOutput('out', Sdf.ValueTypeNames.Token)
+
+    material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(combined)
     
 # Connect a texture to the relevant shader
 def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:ShadingContext, effectName:str, output:UsdShade.Output, name:str) -> bool:
@@ -895,26 +933,31 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
         if effectName == "stencil":
             outputType = Sdf.ValueTypeNames.Float
 
+            #---------------------------------------------------- Pack invert/round/convert into a "_stencil" NodeGraph
+            nodeGraphPath:Path = material.GetPath().AppendPath(name + "_stencil")
+            nodeGraph:UsdShade.NodeGraph = UsdShade.NodeGraph.Define(stage, nodeGraphPath)
+            nodeGraph.CreateInput("in", outputType).ConnectToSource(output)
+
             #---------------------------------------------------- Invert
-            path:Path = material.GetPath().AppendPath(name + "_invert_color")
-            invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            invertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(nodeGraphPath) + "/invert")
             invertShader.CreateIdAttr('ND_invert' + _UTIL_get_node_type_prefix(outputType))
-            invertShader.CreateInput("in", outputType).ConnectToSource(output)
-            invertShader.CreateOutput('out', outputType)
+            invertShader.CreateInput("in", outputType).ConnectToSource(nodeGraph.GetInput("in"))
+            invertOutput = invertShader.CreateOutput('out', outputType)
 
             #---------------------------------------------------- Round to 0 or 1
-            path:Path = material.GetPath().AppendPath(name + "_set_0_or_1")
-            roundShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            roundShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(nodeGraphPath) + "/round")
             roundShader.CreateIdAttr("ND_round_float")
-            roundShader.CreateInput("in", outputType).ConnectToSource(invertShader.GetOutput('out'))
+            roundShader.CreateInput("in", outputType).ConnectToSource(invertOutput)
             roundOutput = roundShader.CreateOutput('out', outputType)
 
             #---------------------------------------------------- Convert to color3f for standard_surface's opacity input
-            path:Path = material.GetPath().AppendPath(name + "_opacity_color")
-            convertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
+            convertShader:UsdShade.Shader = UsdShade.Shader.Define(stage, str(nodeGraphPath) + "/convert")
             convertShader.CreateIdAttr("ND_convert_float_color3")
             convertShader.CreateInput("in", outputType).ConnectToSource(roundOutput)
-            output = convertShader.CreateOutput('out', Sdf.ValueTypeNames.Color3f)
+            convertOutput = convertShader.CreateOutput('out', Sdf.ValueTypeNames.Color3f)
+
+            nodeGraph.CreateOutput('out', Sdf.ValueTypeNames.Color3f).ConnectToSource(convertOutput)
+            output = nodeGraph.GetOutput('out')
 
             #---------------------------------------------------- glPreview opacityThreshold
             if exportGlPreviewMaterial and effectName in context.previewOutputs:
@@ -952,14 +995,16 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
             #---------------------------------------------------- Read displacement height from the advancedMaterial
             displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
 
-            #---------------------------------------------------- Displacement node, connected to the material's mtlx:displacement output
+            #---------------------------------------------------- Displacement node - combined into the material's single
+            #---------------------------------------------------- mtlx:displacement output by _USD_connect_displacement_outputs
             path:Path = material.GetPath().AppendPath(name + "_displacement")
             displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             displacementShader.CreateIdAttr("ND_displacement" + _UTIL_get_node_type_prefix(outputType))
             displacementShader.CreateInput("displacement", outputType).ConnectToSource(output)
             displacementShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(displacementHeight)
             output = displacementShader.CreateOutput('out', Sdf.ValueTypeNames.Token)
-            result = material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
+            context.displacementOutputs[effectName] = output
+            result = output
 
         elif effectName == "vectorDisplace":
             outputType = Sdf.ValueTypeNames.Vector3f
@@ -967,14 +1012,16 @@ def _USD_connect_texture_output_to_shader_input(stage:Usd.Stage, context:Shading
             #---------------------------------------------------- Read displacement height from the advancedMaterial
             displacementHeight = float(advancedMaterialChannels.find("displace").get("value"))
 
-            #---------------------------------------------------- Vector displacement node, connected to the material's mtlx:displacement output
+            #---------------------------------------------------- Vector displacement node - combined into the material's single
+            #---------------------------------------------------- mtlx:displacement output by _USD_connect_displacement_outputs
             path:Path = material.GetPath().AppendPath(name + "_vectorDisplacement")
             displacementShader:UsdShade.Shader = UsdShade.Shader.Define(stage, path)
             displacementShader.CreateIdAttr("ND_displacement_vector3")
             displacementShader.CreateInput("displacement", outputType).ConnectToSource(output)
             displacementShader.CreateInput("scale", Sdf.ValueTypeNames.Float).Set(displacementHeight)
             output = displacementShader.CreateOutput('out', Sdf.ValueTypeNames.Token)
-            result = material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
+            context.displacementOutputs[effectName] = output
+            result = output
 
         #---------------------------------------------------- displace/vectorDisplace are already fully wired above
         if effectName not in ("displace", "vectorDisplace"):
@@ -1554,7 +1601,7 @@ def _USD_create_texture_adjust_nodegraph(stage:Usd.Stage, materialPath:Path, xml
     textureAdjustNodeGraph = UsdShade.NodeGraph.Define(stage, textureAdjustNodeGraphPath)
     textureAdjustNodeGraph.CreateInput('texture', readType).ConnectToSource(textureInput)
     textureAdjustNodeGraph.CreateInput('invert', Sdf.ValueTypeNames.Int).Set(invert)
-    textureAdjustNodeGraph.CreateInput('outLow', readType).Set(eval(_UTIL_float_to_out_type(srcLow, readType)))
+    textureAdjustNodeGraph.CreateInput('outLow', readType).Set(eval(_UTIL_float_to_out_type(srcLow, readType, alpha=0.0)))
     textureAdjustNodeGraph.CreateInput('outHigh', readType).Set(eval(_UTIL_float_to_out_type(srcHigh, readType)))
     textureAdjustNodeGraph.CreateInput('brightness', readType).Set(eval(_UTIL_float_to_out_type(brightness, readType)))
     textureAdjustNodeGraph.CreateInput('contrast', readType).Set(eval(_UTIL_float_to_out_type(contrast, readType)))
@@ -2016,28 +2063,35 @@ def _UTIL_get_mapped_channel(chName:str, itemType:str=None, brdfType:str = None)
     _DEBUG_diag("Unsupported", "Channel", f"[{chName}] is not yet supported (ignored)")
     return None
 
-def _UTIL_float_to_out_type(value:float, outType:Sdf.ValueTypeNames)->str:
+def _UTIL_float_to_out_type(value:float, outType:Sdf.ValueTypeNames, alpha:float=1.0)->str:
     """
     Convert a float value to a specified Sdf.ValueTypeNames type.
 
     Parameters:
         value (float): The float value to be converted.
         outType (Sdf.ValueTypeNames): The target type for conversion.
+        alpha (float): The 4th-component value to pad with for Color4f. Defaults to 1.0 (the
+            real no-op default for ND_multiply_color4/ND_contrast_color4's alpha component,
+            used by the brightness/contrast callers). ND_remap_color4's "outLow" caller passes
+            0.0 instead, matching its real identity default (outlow=0/outhigh=1) - passing 1.0
+            for both outLow and outHigh collapses the alpha channel to a constant regardless of
+            the real per-pixel alpha, breaking alpha="only"/swizzling="alpha" - see CLAUDE.md
+            Round 57.
 
     Returns:
         Union[float, Tuple[float, float, float], Tuple[float, float, float, float]]:
         - Returns the original float if the target type is Float or Double.
         - Returns a tuple of three identical float values if the target type is Color3f or Vector3f.
-        - Returns a tuple of three identical float values with an additional 1.0 if the target type is Color4f.
+        - Returns a tuple of three identical float values with `alpha` as the 4th if the target type is Color4f.
     """
     if outType in [Sdf.ValueTypeNames.Float, Sdf.ValueTypeNames.Double]:
         return f"{value}"
-            
+
     elif outType in [Sdf.ValueTypeNames.Color3f, Sdf.ValueTypeNames.Vector3f]:
         return f"({value}, {value}, {value})"
-            
+
     elif outType == Sdf.ValueTypeNames.Color4f:
-        return f"({value}, {value}, {value}, 1.0)"
+        return f"({value}, {value}, {value}, {alpha})"
 
 def _UTIL_get_node_type_prefix(outType:str):
     """

@@ -16,9 +16,26 @@ import math
 # (it has its own specular/emission intensity inputs). Construction reads usdPreviewValue for the
 # glPreview shader when present, falling back to usdValue everywhere else.
 
+# Cap on the derived IOR - without it, specAmt approaching 1.0 (with the default saturation=.99999)
+# sends the result toward the hundreds of thousands, which Modo and Karma's Fresnel math were observed
+# to disagree on wildly (CLAUDE.md Round 59: specAmt=1.0 produced IOR=399998, rendering very
+# differently between the two). 20.0 is not arbitrary - it's the IOR a specAmt=0.8 case (with the same
+# default saturation) already produces (~17.9), and that case rendered consistently between Modo and
+# Karma in the same test - so this cap stays inside a range already confirmed to agree.
+_MAX_DERIVED_IOR = 20.0
+
+# Physical floor for an IOR (nothing has a refractive index below vacuum) - unlike _MAX_DERIVED_IOR,
+# not a tuned/empirical value. Modo's refIndex field allows values < 1.0 with no validation; a
+# 5-point sweep of such values (0.1-0.9, direct passthrough, CLAUDE.md Round 59) rendered completely
+# flat/zero-specular in Karma across the board while Modo still showed a graded response - and since
+# specAmt is derived FROM refIndex in that same code path (see the useRefIdx=1/specRefIdx=0 branch
+# below), an unclamped refIndex < 1.0 also pushes the derived specAmt above 1.0 (up to 2.0 at
+# refIndex=0.9) - a second invalid value from the same root cause.
+_MIN_IOR = 1.0
+
 # IOR approximation from specular amount; saturation<1 keeps the sqrt argument <1 (avoids div-by-zero at specAmt==1)
 def _ior_from_spec_amt(specAmt, saturation=.99999):
-    return 2 / (1 - math.sqrt(specAmt * saturation)) - 1
+    return min(2 / (1 - math.sqrt(specAmt * saturation)) - 1, _MAX_DERIVED_IOR)
 
 # Maps x toward 1 as x grows past 1; k controls how fast it saturates. Approximation based on observation.
 def _saturating_curve(x, k):
@@ -128,6 +145,9 @@ def _compute_overrides(brdfType, channels):
 
         if not useRefIdx and refIndex is not None and specAmt is not None:
             updates['refIndex'] = _ior_from_spec_amt(float(specAmt))
+        elif useRefIdx and refIndex is not None:
+            # Raw passthrough otherwise - only clamped if it's below the physical floor (see _MIN_IOR).
+            updates['refIndex'] = max(float(refIndex), _MIN_IOR)
 
     elif brdfType == "principled":
         if useRefIdx:
@@ -139,10 +159,12 @@ def _compute_overrides(brdfType, channels):
                 updates['specAmt'] = _saturating_curve(x, k)
                 updates['refIndex'] = x
             else:
-                x = refIdx
+                # Clamped before use (not just on the output) so a refIdx < 1.0 doesn't also push the
+                # derived specAmt above 1.0 - see _MIN_IOR.
+                x = max(refIdx, _MIN_IOR)
                 k = 20 # magic number, determine how fast the value reaches 1 when refIdx > 1
                 updates['specAmt'] = _saturating_curve(x, k)
-                updates['refIndex'] = refIdx
+                updates['refIndex'] = x
         else:
             specAmnt = float(specAmt)
             updates['specAmt'] = 1.0

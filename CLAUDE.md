@@ -6,7 +6,7 @@ puis le travail effectué dans Claude Code pour la mettre en œuvre. Il sert de
 point de reprise : lis-le avant de proposer des changements pour rester
 cohérent avec la direction déjà validée par l'auteur du projet.
 
-**Dernière mise à jour : 2026-08-12. Les 3 étages du pipeline sont câblés de
+**Dernière mise à jour : 2026-08-13. Les 3 étages du pipeline sont câblés de
 bout en bout et validés dans Modo (voir plus bas). Session du 2026-08-11/12 :
 corrections de bugs trouvés en testant "PF_ShaderBall_base" dans Modo/Houdini
 (Rounds 28-36 - stencil, bump/normal, displacement scalaire et vectoriel,
@@ -19,6 +19,34 @@ aucune des 3 familles de nœuds de rampe essayées (`ND_ramp_gradient`,
 s'est avérée fonctionner dans Karma malgré des graphes structurellement
 corrects. Une couche `Gradient` ne produit donc actuellement rien côté
 USD, seulement un XML normalisé fidèle.**
+
+**Session du 2026-08-13 : tous les Rounds 28-42 retestés et confirmés avec
+un export réel dans Modo/Houdini** (stencil dont l'alpha PNG, bump, normal,
+swizzling, fuite de câblage inter-effets, `displace`+`vectorDisplace`
+combinés, extraction XML des Gradients) - clôt la priorité de retest
+ouverte depuis le Round 28. Deux nouveaux bugs trouvés et corrigés au
+passage : `displace`+`vectorDisplace` combinés sur le même matériau
+s'écrasaient l'un l'autre sur `mtlx:displacement` (Round 56, corrigé via
+`ND_mix_displacementshader`) ; `alpha="only"` (stencil sur PNG à alpha)
+était cassé par un bug de remap qui écrasait le canal alpha à une
+constante avant extraction (Round 57). Les nœuds `invert`/`round`/
+`convert` du stencil ont aussi été regroupés dans un `NodeGraph` dédié
+(Round 58). Une légère différence de spécularité entre Modo et Karma
+repérée en testant le bump a ensuite été investiguée via une longue série
+de matrices de shader balls isolant chaque paramètre BRDF (Round 59, clos) :
+deux bugs réels trouvés et corrigés, tous les deux des valeurs hors
+domaine physique passées sans validation à `standard_surface` - un IOR
+dérivé de `specAmt` qui explose vers l'infini près de `specAmt=1.0`
+(`_MAX_DERIVED_IOR=20.0`) et un `refIndex` brut `< 1.0` (`_MIN_IOR=1.0`),
+tous les deux dans `specular_ior.py`, tous les deux confirmés par
+l'auteur après retest. Toutes les branches sauf une (`useRefIdx=1`+
+`specRefIdx=1`) rendent maintenant de façon cohérente entre Modo et
+Karma - cette dernière montre un écart de forme de courbe (pas une valeur
+invalide) que l'auteur a choisi d'accepter comme limite connue plutôt que
+de poursuivre la calibration, la différence d'interprétation de
+l'environnement lumineux entre les deux moteurs rendant la comparaison
+visuelle difficile à trancher plus finement sans outillage de mesure
+dédié. Documenté dans le README.
 
 **Contexte important (2026-08-08, fin de session)** : dans le setup de
 l'auteur, **le viewport GL de Houdini/Karma résout le graphe mtlx
@@ -120,19 +148,22 @@ clos).** Les 4 wrap modes mtlx (`periodic`/`clamp`/`mirror`/`constant`)
 sont aussi tous testés dans Houdini (Round 10/11/17, clos) :
 `periodic`/`clamp` fonctionnent, `mirror`/`constant` sont des limitations
 Houdini connues et diagnostiquées (`_DEBUG_diag`), pas des bugs de ce kit.
-**PRIORITAIRE pour la prochaine session (2026-08-12)** : re-exporter
-"PF_ShaderBall_base" dans Modo et confirmer que les Rounds 28-40 se
-comportent comme attendu - rien de tout ce travail n'a encore été
-retesté avec un export réel depuis le Round 28. En particulier : le
-support des couches `Gradient` (Rounds 37-40) - vérifier que `value`/
-`color` (`red`/`green`/`blue`/`alpha`) montrent bien des `<Key pos=".."
-value=".."/>` avec de vraies positions/valeurs et un `slopeType` en
-toutes lettres (ex. `"DIRECT"`) dans le XML normalisé, et que le
-`txtrLocator` du Gradient apparaît. La couche `vectorDisplace` (Round 36)
-et le fix de fuite de câblage inter-effets (Round 35) sont aussi
-prioritaires - premiers tests réels jamais faits pour l'un comme pour
-l'autre. Voir "Prochaines étapes possibles" en fin de fichier pour la
-suite envisagée sur les gradients (traduction USD/mtlx, pas commencée).
+**Retest du 2026-08-13, CLOS** : "PF_ShaderBall_base" re-exporté et tous les
+Rounds 28-42 confirmés se comporter comme attendu (stencil dont l'alpha
+PNG, bump, normal, swizzling, `vectorDisplace`, fuite de câblage
+inter-effets, extraction XML des Gradients - voir la note en tête de
+fichier et chaque round individuel pour le détail). Deux bugs
+supplémentaires trouvés et corrigés pendant ce retest (Round 56 et 57).
+**Round 59 clos le 2026-08-13** : deux bugs réels trouvés et corrigés
+(`_MAX_DERIVED_IOR`, `_MIN_IOR`, tous les deux dans `specular_ior.py`).
+`useRefIdx=1`/`specRefIdx=1` reste avec un écart de forme de courbe non
+corrigé - accepté par l'auteur comme limite connue (voir Round 59 pour le
+détail complet et le raisonnement), documenté dans le README, pas de
+piste de correction retenue pour l'instant. Plus de priorité ouverte
+issue de cette session à ce stade - voir "Prochaines étapes possibles" en
+fin de fichier pour la suite envisagée sur les gradients (traduction
+USD/mtlx, abandonnée au Round 54, pas de nouvelle piste depuis) et les
+autres points sans urgence.
 
 **Priorité précédente (toujours pas résolue)** : le système de colorspace a été
 simplifié aux Round 19-21 (table directe `MODO_COLORSPACE_TO_USD`, système
@@ -145,14 +176,10 @@ Round 21) jusqu'à ce qu'elles soient ajoutées à la table. Le bug d'origine
 qui a lancé
 cette discussion (mtlx ne force pas `"raw"`/l'équivalent pour les normal
 maps, contrairement à glPreview - voir la session du 2026-08-10 avant le
-Round 19) reste **non résolu**. Rester vigilant sur bump/normal/
-`<constant>`/**stencil** (la couche, pas le wrap mode), toujours non
-exercés par le fichier de test "PF_ShaderBall_base". **Stencil en
-particulier** (Round 28) : trois bugs corrigés (id de nœud invalide, trick
-invert+round mort, mismatch de type `opacity` float/color3f) + glPreview
-ajouté (`opacity` + `opacityThreshold=0.5`), vérifiés uniquement contre
-`usd-core`/MaterialX standalone - **rien testé dans Modo/Houdini**, à
-faire en priorité avec un fichier de test qui a une vraie couche stencil.
+Round 19) reste **non résolu**. `<constant>` reste toujours non exercé par
+le fichier de test "PF_ShaderBall_base". Bump/normal/stencil, en
+revanche, ont depuis été testés et confirmés (Rounds 29/33/34/57/58,
+retest du 2026-08-13) - plus une priorité.
 
 ## Le projet
 
@@ -1828,7 +1855,7 @@ Deux corrections faites en aparté dans ce round, sur demande de l'auteur :
   vector2), pas le type de sortie - les deux restent donc en dur,
   commentés pour expliquer pourquoi.
 
-#### Round 29, `bump` cassait à l'export réel dans Modo (`AttributeError`) + même bug de fallthrough que stencil corrigé pour bump/normal (2026-08-11)
+#### Round 29, `bump` cassait à l'export réel dans Modo (`AttributeError`) + même bug de fallthrough que stencil corrigé pour bump/normal — CONFIRMÉ DANS HOUDINI POUR `bump` (2026-08-11, retest confirmé 2026-08-13)
 
 Premier test réel dans Modo d'une couche bump (jusqu'ici jamais exercée par
 "PF_ShaderBall_base") : crash immédiat,
@@ -1863,6 +1890,249 @@ la chaîne contre `usd-core` : `shader.inputs:normal` pointe bien vers
 toujours verts. **`normal` n'a pas encore été testée dans Modo** (seul
 `bump` a crashé/été testée ce round) - même classe de bug, donc corrigée
 par cohérence, mais pas confirmée en rendu.
+
+**Retesté et confirmé par l'auteur le 2026-08-13** pour `bump` : le rendu
+est correct. L'auteur note au passage une **légère différence sur la
+spécularité** entre Modo et Houdini sur ce même test - pas creusée ce
+round (hors sujet du bump lui-même), voir Round 59 juste après pour le
+suivi dédié. `normal` reste non testée - voir la liste de tests toujours
+ouverte en tête de fichier.
+
+#### Round 59, différence de spécularité repérée en testant le bump (Round 29) — DEUX BUGS RÉELS CORRIGÉS ET CONFIRMÉS, UNE LIMITE CONNUE ACCEPTÉE, CLOS POUR L'INSTANT (2026-08-13)
+
+En retestant le Round 29 (bump), l'auteur remarque une légère différence
+sur les réflexions spéculaires entre le rendu Modo et le rendu Karma - pas
+assez caractérisée sur le coup pour en tirer une cause. Décision : au lieu
+de deviner, construire une matrice de test isolée (14 shader balls, un seul
+paramètre spéculaire varié par bille, base `diffCol` neutre) couvrant
+`brdfType` (gtr/principled) × `useRefIdx` × `specRefIdx` × `metallic` ×
+`specTint`/`specCol` - même discipline que le reste de cette session
+(isoler une variable à la fois plutôt que de chasser un rendu qui mélange
+tout).
+
+**Fichiers de test réels fournis par l'auteur** (scène "Specular tests_01",
+"PF_ShaderBall") : `Specular tests_01_normalized.xml` et
+`Specular tests_01.usda`, plus un rendu Modo et un rendu Karma des 14
+billes côte à côte. Comparaison directe des trois (XML normalisé, `.usda`
+construit, rendus) - 13 des 14 cellules correspondaient exactement à la
+matrice demandée. Deux billes se sont démarquées visuellement dans les
+deux rendus : `M_Ball_principled_4` (chrome brillant dans Modo, noir pur
+dans Houdini) et `M_Ball_principled_8` (sombre dans Modo, chrome/miroir
+éclatant dans Houdini) - `M_Ball_principled_9` un peu moins marqué mais
+dans le même sens.
+
+**Cause 1, `M_Ball_principled_4`** : la bille a été montée avec
+`refIndex="0.2"` dans Modo, pas `1.2` comme demandé - une valeur d'IOR
+inférieure à 1.0 est hors du domaine physique valide (rien n'a un indice
+de réfraction inférieur au vide). Probablement une faute de frappe de
+configuration, pas un bug de l'export - **à corriger dans Modo (remettre
+1.2) et re-tester** pour obtenir une lecture propre du passthrough direct
+d'IOR à cette valeur.
+
+**Cause 2, `M_Ball_principled_8`/`9`, bug réel trouvé et corrigé** :
+les deux ont `specAmt="1.0"` (leur max) en brut, et `_ior_from_spec_amt`
+(`normalize/specular_ior.py`) avec sa saturation par défaut (`.99999`)
+envoie ça vers un IOR **quasi infini** - confirmé dans le `.usda` :
+`specular_IOR = 399998`. Vérifié algébriquement : le dénominateur
+`1 - sqrt(specAmt * saturation)` tend vers zéro quand `specAmt` tend vers
+`1/saturation`, donc le résultat explose - le garde-fou existant
+(`saturation=.99999`) évite seulement une vraie division par zéro, pas
+une valeur absurde. `M_Ball_GTR_2` (`specAmt=0.8` avec la même formule,
+même saturation par défaut) donne un IOR ≈ 17.9 et **rend de façon
+cohérente entre Modo et Houdini** dans ce même test - preuve empirique
+qu'un IOR dérivé "élevé mais borné" est sans problème, seul l'emballement
+vers l'infini près de `specAmt=1.0` casse l'accord entre les deux moteurs
+(probablement une divergence dans la façon dont chacun gère un Fresnel à
+IOR extrême en flottant).
+
+Corrigé : nouvelle constante `_MAX_DERIVED_IOR = 20.0` dans
+`specular_ior.py`, valeur choisie **empiriquement** (pas arbitraire) -
+c'est précisément la plage déjà confirmée cohérente entre les deux moteurs
+par le cas `GTR_2` ci-dessus, pas un chiffre rond choisi au hasard.
+`_ior_from_spec_amt` retourne maintenant `min(..., _MAX_DERIVED_IOR)`.
+Un seul point de correction protège les 3 sites d'appel (`gtr`/`not
+useRefIdx`, `principled`/`useRefIdx=0`, et `principled`/`specRefIdx=1` -
+ce dernier était déjà à l'abri grâce à sa saturation `.8`, mais bénéficie
+du même filet de sécurité). 2 nouveaux tests ajoutés
+(`tests/normalize/test_specular_ior.py`, un par branche gtr/principled,
+`specAmt="1.0"` → `refIndex` capé à `_MAX_DERIVED_IOR`) - 125 tests pytest
+toujours verts.
+
+**Retest 1 confirmé par l'auteur** (même scène, `refIndex` de
+`M_Ball_principled_4` corrigé à `1.2`) : les billes 4, 8 et 9 rendent
+maintenant de façon nettement plus cohérente entre Modo et Karma - plus
+d'écart flagrant. **Un écart subsiste sur `M_Ball_principled_7`**
+(`useRefIdx=1`/`specRefIdx=1`/`specAmt=0.8`, `refIndex` dérivé = `9.0`,
+donc largement sous le cap) - sombre dans Modo, chrome/miroir éclatant
+dans Karma. Comme son `refIndex` n'est pas extrême, ce n'est pas
+(seulement) le bug du cap - cause encore non identifiée à ce stade.
+
+**Retest 2 (scène "Specular tests_02"), suite à une proposition de
+l'auteur** : dupliquer les 5 billes GTR déjà confirmées cohérentes
+(1-5) en changeant uniquement `brdfType` vers `principled`, mêmes valeurs
+brutes sinon (`specRefIdx=0`, `specTint=0`, `metallic=0` sur les 5
+doublons, `diffCol` changé de `(0,0,0)` à `(0.5,0.5,0.5)` par l'auteur -
+pour que le test `specTint` reste valide si repris plus tard). Objectif :
+isoler si une éventuelle divergence Modo/Karma vient du *brdfType*
+lui-même ou des formules d'override propres à `normalize_specular_ior`.
+
+Deux asymétries de formule identifiées et signalées **avant** le test (pas
+des bugs - des différences déjà présentes dans le code, à connaître pour
+interpréter le résultat) : pour les billes `useRefIdx=1` (jumelles des
+GTR 3/4), `specAmt` reste brut côté gtr (`0.04`, jamais touché dans cette
+branche) mais est **toujours** recalculé côté principled via
+`_saturating_curve(refIndex, 20)` (`0.8`/`0.94`) - confirmé exactement
+dans le XML exporté. Malgré cet écart de valeur exportée, **les rendus
+Modo et Karma sont restés cohérents entre les deux rangées** (gtr vs
+principled) et entre les deux moteurs pour chaque bille - aucune nouvelle
+divergence détectée par ce test, contrairement à P4/P7/P8/P9. Ce test
+utilisait `specRefIdx=0` partout (sur suggestion explicite pour rester
+dans la branche la plus proche du passthrough gtr) - **ne couvre donc
+toujours pas** la branche `specRefIdx=1` du P7 non résolu.
+
+**Retest 3 (même fichiers, écrasés), suite à une nouvelle proposition de
+l'auteur** : 5 billes GTR + 5 Principled jumelles, `useRefIdx=0` partout,
+balayage complet de `specAmt` (`0.0`/`0.2`/`0.4`/`0.6`/`0.8`). Confirmé
+dans le XML : `refIndex` dérivé strictement identique bille à bille entre
+gtr et principled (même formule exacte dans cette branche, pas
+d'asymétrie ici) - de `1.0` (à `specAmt=0`, IOR du vide, aucune réflexion
+Fresnel attendue) jusqu'à `17.9` (à `specAmt=0.8`, sous le cap). Rendu :
+progression cohérente et fluide dans les 4 images (Modo/Karma ×
+gtr/principled), y compris à `specAmt=0` (bille plate/mate dans les 4,
+comme attendu physiquement) - **confirme la branche `useRefIdx=0` sur
+toute sa plage, pour les deux `brdfType`**.
+
+**Bilan à ce stade** : la branche `useRefIdx=0` (les deux `brdfType`) est
+confirmée cohérente sur toute sa plage de `specAmt`. Seule la branche
+`useRefIdx=1`/`specRefIdx=1` (celle de `M_Ball_principled_7`, formule
+`_ior_from_spec_amt(specAmt, .8)` puis `_saturating_curve(x, k=100)`)
+reste non isolée et est la seule piste encore ouverte pour expliquer P7.
+Prochain test proposé : dupliquer P6/P7 (`specRefIdx=1`) à côté d'un
+équivalent `specRefIdx=0` à `refIndex` assorti, pour isoler si c'est
+spécifiquement la courbe `k=100`/la double dérivation qui casse l'accord
+avec le rendu natif de Modo.
+
+**Retest 4 (même fichiers, écrasés), résultat d'une erreur de configuration
+- bug réel trouvé et corrigé quand même** : en essayant de monter le test
+`specRefIdx=1` proposé ci-dessus (5 billes GTR + 5 Principled), l'auteur a
+laissé `specRefIdx=0` sur les 5 billes Principled et posé `refIndex=0.1`
+à `0.9` (au lieu de `specAmt`) - donc en réalité un balayage de la branche
+`useRefIdx=1`/`specRefIdx=0` **déjà confirmée cohérente**, mais avec des
+valeurs de `refIndex` **hors du domaine physique valide** (`< 1.0` - rien
+n'a un indice de réfraction inférieur au vide). Confirmé dans le XML :
+`refIndex` brut = `0.1`/`0.3`/`0.5`/`0.7`/`0.9`, `specAmt` brut resté à
+`0.0`-`0.8` (copié de la rangée GTR, sans effet dans cette branche).
+
+Résultat, sans rapport avec le test prévu mais précieux : **les 5 billes
+Principled rendent en gris plat, aucune spécularité visible, dans Karma -
+sur toute la rangée**, alors que Modo montre encore une réponse graduée
+(pas nulle) sur la même plage. Le même symptôme que la faute de frappe du
+Round 59/retest 1 (`M_Ball_principled_4`, `refIndex=0.2`), mais confirmé
+cette fois sur un balayage complet de 5 points plutôt qu'un seul cas
+isolé - la coïncidence n'est plus plausible, c'est un vrai effet de seuil.
+Vérifié algébriquement : dans cette branche, `specAmt` est **dérivé** de
+`refIndex` via `_saturating_curve(refIndex, 20)` - avec `refIndex < 1.0`,
+cette formule produit aussi un `specAmt` **supérieur à 1.0** (jusqu'à
+`2.0` à `refIndex=0.9`) - une seule cause racine, deux symptômes hors
+domaine.
+
+Corrigé (`specular_ior.py`), sans attendre de confirmation sur la valeur
+(contrairement à `_MAX_DERIVED_IOR`, `1.0` n'est pas un chiffre choisi
+empiriquement - c'est le plancher physique littéral) : nouvelle constante
+`_MIN_IOR = 1.0`. Deux points de clampage, aux deux seuls endroits où un
+`refIndex` brut (potentiellement invalide, jamais validé côté Modo) entre
+dans le pipeline sans être re-dérivé depuis `specAmt` (qui lui reste
+toujours `>= 1.0` par construction de `_ior_from_spec_amt`, donc jamais
+besoin d'un clamp bas) :
+- gtr, branche `useRefIdx=1` (jusqu'ici totalement intouchée - aucune
+  override n'était calculée, `refIndex` traversait tel quel via le repli
+  `updates.get(...)` de `_normalize_material`) - ajout d'un `elif`
+  explicite qui pose `updates['refIndex'] = max(float(refIndex),
+  _MIN_IOR)`.
+- principled, branche `useRefIdx=1`/`specRefIdx=0` - `x = refIdx` devient
+  `x = max(refIdx, _MIN_IOR)`, clampé **avant** d'alimenter à la fois
+  `_saturating_curve` (pour `specAmt`) et `updates['refIndex']` - corrige
+  les deux symptômes en un seul point, plutôt que de clamper la sortie
+  `refIndex` après coup sans corriger le `specAmt` déjà mal dérivé.
+
+**Vérifié** : les 5 valeurs `refIndex` du retest 4 (`0.1`-`0.9`) donnent
+maintenant toutes `refIndex(usd)=1.0`/`specAmt(usd)=0.0` une fois repassées
+dans `normalize_specular_ior` - cohérent physiquement (IOR = celui du
+milieu environnant → réflectance de Fresnel nulle → specular amount nul
+aussi, pas juste "plus cassé"). Aucune régression sur les valeurs déjà
+confirmées (`refIndex >= 1.0` reste inchangé, `max(x, 1.0)` est une
+identité dans ce cas). 2 nouveaux tests ajoutés (un par branche gtr/
+principled) - 127 tests pytest toujours verts.
+
+**Pas encore retesté dans Houdini** - le test `specRefIdx=1` initialement
+prévu (P6/P7, toujours la seule branche non isolée) reste à refaire, cette
+fois avec `specRefIdx` effectivement mis à `1` sur la rangée Principled et
+`specAmt` (pas `refIndex`) comme variable balayée - voir le tableau déjà
+donné à l'auteur pour les valeurs exactes.
+
+**Retest 5, `specRefIdx=1` finalement testé mais valeur d'entrée trop
+faible pour être concluant** : l'auteur reproduit la config de P7 avec un
+balayage de `diffCol` (noir à gris), mais `specAmt` brut vaut `0.008` (pas
+`0.8` demandé - coquille de saisie). À `specAmt=0.008`, `specRefIdx=1`
+dérive un `refIndex` à peine `1.17` - une réflectivité trop faible pour
+qu'un éventuel écart Modo/Karma soit visible, quel que soit `diffCol`.
+Résultat sans valeur diagnostique, corrigé au retest suivant.
+
+**Retest 6, `specAmt=0.8` correctement appliqué cette fois (identique à
+P7), `diffCol` toujours balayé de noir à gris clair** : **écart confirmé,
+et présent sur tout le balayage de `diffCol`, pas seulement au noir pur**.
+Ça élimine l'hypothèse `diffCol` posée après le Retest 4/5 - la cause
+réelle est bien la branche `specRefIdx=1` elle-même (formule
+`_ior_from_spec_amt(specAmt, .8)` puis `_saturating_curve(x, k=100)`,
+tous les deux qualifiés de "magic number" dans leurs propres commentaires
+depuis le début, jamais validés).
+
+**Retest 7, balayage de `specAmt` (`0.1`→`0.9`) à l'intérieur de
+`specRefIdx=1`, `diffCol` fixe cette fois, rangée GTR de référence avec
+`refIndex` posé directement aux mêmes valeurs cibles** : l'auteur note
+d'abord un "bon accord" GTR/Principled **dans Karma** - mais la vraie
+question (Modo vs Karma pour Principled) restait à vérifier séparément.
+Comparaison directe demandée : **`Principled 1` (le `refIndex` dérivé le
+plus bas, `1.79`) rend ~20% plus lumineux dans Modo que dans Karma ;
+`Principled 5` (`refIndex` dérivé le plus haut, `12.2`) rend à peu près
+pareil dans les deux**. Diagnostic : **la plage dynamique de Karma pour
+cette branche est plus large que celle de Modo** - Karma part plus sombre
+au bas de la plage et rejoint Modo seulement en haut, alors que le rendu
+natif de Modo pour son propre curseur `specAmt` (0.1→0.9) reste
+comparativement plat/compressé sur toute la plage. Confirme que ce n'est
+pas seulement un problème de valeur extrême (le Round 59 initial, à
+`specAmt=1.0` donnant un IOR quasi infini) - c'est la forme entière de la
+courbe de conversion `specAmt` → `(specular, specular_IOR)` qui ne
+reproduit pas fidèlement la réponse native de Modo pour cette branche
+précise.
+
+**Décision de l'auteur (2026-08-13)** : contrairement aux deux bugs
+précédents (blowup près de `specAmt=1.0`, `refIndex < 1.0`) - tous les
+deux clairement des valeurs hors domaine physique, corrigées avec
+confiance - cet écart de forme de courbe n'a pas de correction évidente
+sans un vrai travail de calibration empirique (échantillonnage de
+luminance pixel par pixel, pas à l'œil, potentiellement une refonte de la
+stratégie de traduction plutôt qu'un simple ajustement de constante). Vu
+que l'environnement lumineux (HDRI/colorspace/interprétation) diffère
+déjà entre Modo et Karma indépendamment de ce code (confirmé par plusieurs
+faux-positifs de cette même session - Round 6/7/8 avaient déjà attribué à
+tort des différences de rendu à des bugs de blend/colorspace alors que
+c'était un bug de pivot de tuilage), l'auteur juge le résultat actuel
+"suffisamment bon pour l'instant" et clôt ce point - **`useRefIdx=1`/
+`specRefIdx=1` reste une limite connue et acceptée**, pas retravaillée
+plus avant cette session.
+
+**Bilan complet du Round 59** : deux bugs réels trouvés et corrigés,
+confirmés en rendu réel - le blowup de l'IOR dérivé près de `specAmt=1.0`
+(`_MAX_DERIVED_IOR=20.0`) et le passthrough d'un `refIndex < 1.0`
+physiquement invalide (`_MIN_IOR=1.0`), tous les deux dans
+`specular_ior.py`. Toutes les branches sauf `useRefIdx=1`/`specRefIdx=1`
+sont confirmées cohérentes entre Modo et Karma après une série de tests
+isolant chaque variable (brdfType, `useRefIdx`, `metallic`, `specTint`,
+`diffCol`, et enfin `specRefIdx` lui-même). `useRefIdx=1`/`specRefIdx=1`
+reste la seule branche avec un écart résiduel (forme de courbe, pas une
+valeur invalide) - accepté comme limite connue, à documenter dans le
+README, pas de piste de correction retenue pour l'instant.
 
 #### Round 30, crash `AttributeError: 'NoneType' object has no attribute 'GetFullName'` dans `_USD_connect_operator` — CORRIGÉ, CONFIRMÉ PAR L'AUTEUR DANS MODO (2026-08-11)
 
@@ -1992,7 +2262,7 @@ avant - `UsdPreviewSurface` a bien un vrai input `"displacement"`,
 contrairement à `standard_surface`. 123 tests toujours verts (aucun test
 ne couvre cette fonction, dépendante de Modo).
 
-#### Round 33, `_USD_create_texture_adjust_nodegraph` : le mécanisme d'extraction alpha/swizzling n'a probablement jamais fonctionné, pour aucun effet — CORRIGÉ, PAS ENCORE TESTÉ DANS MODO/HOUDINI (2026-08-11)
+#### Round 33, `_USD_create_texture_adjust_nodegraph` : le mécanisme d'extraction alpha/swizzling n'a probablement jamais fonctionné, pour aucun effet — CORRIGÉ, CONFIRMÉ DANS HOUDINI (2026-08-11, retest confirmé 2026-08-13)
 
 Parti d'une question simple de l'auteur sur le displacement ("quel type de
 texture peut alimenter un nœud `mtlx:displacement`"), l'investigation a
@@ -2085,14 +2355,18 @@ preuve que cette combinaison soit un état atteignable dans l'UI de Modo
 (probablement des modes mutuellement exclusifs), donc pas de garde ajoutée
 sans confirmation.
 
-**Rien de tout ça n'est testé dans Modo/Houdini.** 123 tests pytest
-toujours verts (aucun test ne couvre cette fonction, dépendante de Modo).
-Prioritaire pour la prochaine session : exporter une couche avec
-"Swizzling" activé (n'importe quel effet) et une couche stencil/displace
-avec "Alpha: Only", pour confirmer visuellement que l'extraction de canal
-fonctionne enfin.
+123 tests pytest toujours verts (aucun test ne couvre cette fonction,
+dépendante de Modo).
 
-#### Round 34, `AttributeError: type object 'ValueTypeNames' has no attribute 'color3f'` sur la branche `"normal"` — CORRIGÉ (2026-08-11)
+**Retesté et confirmé par l'auteur le 2026-08-13** : le mécanisme
+d'extraction de canal fonctionne ("pass the test") - `alpha="only"`
+confirmé via le stencil (Round 57, qui a aussi corrigé un second bug de
+remap sur le canal alpha découvert en le testant) et le swizzling
+red/green/blue confirmé fonctionnel sur ce même passage. La limite
+`alpha="only"` + `swizzling` simultanés (ci-dessus) reste non vérifiée,
+probablement pas un état atteignable dans l'UI de Modo.
+
+#### Round 34, `AttributeError: type object 'ValueTypeNames' has no attribute 'color3f'` sur la branche `"normal"` — CORRIGÉ, CONFIRMÉ DANS HOUDINI (2026-08-11, retest confirmé 2026-08-13)
 
 Crash à l'export réel dans Modo, sur une modification faite par l'auteur
 lui-même hors session Claude Code suivie (pas un des rounds précédents) :
@@ -2116,7 +2390,13 @@ en `outputType = Sdf.ValueTypeNames.Float`, ce qui reproduit exactement
 l'ancien id posé en dur (`"ND_normalmap_float"`) tout en gardant la
 construction dynamique voulue par l'auteur. 123 tests toujours verts.
 
-#### Round 35, fuite de `output` entre effets dans `_USD_connect_effect_stack` — CORRIGÉ, TROUVÉ PAR L'AUTEUR EN INSPECTANT LE GRAPHE DANS HOUDINI (2026-08-11)
+**Retesté et confirmé par l'auteur le 2026-08-13** : la couche `normal`
+("Normal layer looks perfect") - premier test réel de cette branche,
+jamais exercée avant ce round (voir aussi Round 29, qui avait corrigé le
+même bug de fallthrough pour `normal` en même temps que `bump`, mais sans
+jamais avoir testé `normal` elle-même jusqu'ici).
+
+#### Round 35, fuite de `output` entre effets dans `_USD_connect_effect_stack` — CORRIGÉ, CONFIRMÉ DANS HOUDINI (2026-08-11, retest confirmé 2026-08-13)
 
 L'auteur repère, en reconstruisant le graphe mtlx dans l'éditeur "Edit
 Material" de Houdini sur un export réel de "PF_ShaderBall_base", une
@@ -2177,9 +2457,9 @@ l'`advancedMaterial`, jamais de la sortie d'un effet précédent sans
 rapport. La valeur de retour de la fonction (déjà ignorée par son unique
 appelant, `_USD_export_shadertree` ligne 533) n'a pas d'implication
 au-delà de cette fonction. 123 tests toujours verts (aucun test ne couvre
-cette fonction, dépendante de Modo). **Pas encore retesté dans Modo/Houdini**
-- la correction elle-même n'a pas encore été validée par un nouvel export,
-seul le bug a été confirmé par lecture directe du `.usda` existant.
+cette fonction, dépendante de Modo). **Retesté et confirmé par l'auteur le
+2026-08-13** ("This one doesn't occurs anymore") - la fuite ne se
+reproduit plus sur un nouvel export.
 
 #### Round 36, ajout de l'effet `vectorDisplace` + correction du typage `displacementshader` — IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO/HOUDINI (2026-08-11)
 
@@ -2261,7 +2541,7 @@ toujours verts (aucun test ne couvre `ShaderTree.py`, dépendant de Modo).
 **Rien de tout ça n'est testé dans Modo/Houdini** - premier test réel à
 faire avec un fichier ayant une vraie couche `vectorDisplace`.
 
-#### Round 37, support des couches Gradient (`iCHANTYPE_GRADIENT`) — étage 1 seulement (extraction XML), PAS ENCORE CÂBLÉ CÔTÉ USD, PAS ENCORE TESTÉ DANS MODO (2026-08-11)
+#### Round 37, support des couches Gradient (`iCHANTYPE_GRADIENT`) — étage 1 seulement (extraction XML), PAS CÂBLÉ CÔTÉ USD (abandonné, voir Round 54), CONFIRMÉ DANS MODO (2026-08-11, retest confirmé 2026-08-13)
 
 Chantier ouvert par l'auteur : `_UTIL_format_channel_value` (étage 1,
 extraction Modo → XML brut) traitait tout channel `iCHANTYPE_GRADIENT`
@@ -2358,14 +2638,11 @@ plutôt que reconstruire les nœuds `ramp4`/`splitlr` du stdlib mtlx, qui
 ne couvrent que des formes simples à 2-4 points) reste à concevoir, en
 attendant les réponses sur `param`/domaine ci-dessus.
 
-**Rien de tout ça n'est testé dans Modo** - à vérifier en priorité :
-re-exporter "PF_ShaderBall_base" (avec sa couche `Gradient` de test) et
-confirmer que `value`/`color` affichent maintenant de vrais tuples de 64
-floats dans le XML normalisé, au lieu du littéral `"gradient"`/des
-`lx.object.Unknown` illisibles. 123 tests pytest toujours verts (aucun
-test ne couvre ce chemin, dépendant de Modo).
+123 tests pytest toujours verts (aucun test ne couvre ce chemin, dépendant
+de Modo). **Retesté et confirmé par l'auteur le 2026-08-13** (voir la note
+consolidée à la fin du Round 42 pour l'ensemble de l'arc Round 37-42).
 
-#### Round 38, gradient : extraction des vraies clés (position/valeur) au lieu d'un échantillonnage `Generate(t)` — étage 1 seulement, PAS ENCORE TESTÉ DANS MODO (2026-08-11)
+#### Round 38, gradient : extraction des vraies clés (position/valeur) au lieu d'un échantillonnage `Generate(t)` — étage 1 seulement, CONFIRMÉ DANS MODO (2026-08-11, retest confirmé 2026-08-13)
 
 Suite du Round 37 : l'auteur préfère récupérer les vraies clés discrètes
 (position + valeur) qui définissent une rampe plutôt qu'un échantillonnage
@@ -2470,14 +2747,11 @@ extraction XML, rien côté USD) :
 **Toujours pas fait, volontairement** : aucune branche `"gradient"` dans
 `_USD_export_shadertree` - la traduction USD/mtlx reste à concevoir.
 
-**Rien de tout ça n'est testé dans Modo** - à vérifier en priorité :
-re-exporter "PF_ShaderBall_base" et confirmer que `value`/`color` montrent
-maintenant de vrais tuples de clés (2-3 entrées courtes) au lieu des tuples
-de 64 échantillons du Round 37, et que le `txtrLocator` du Gradient
-apparaît bien dans le XML. 123 tests pytest toujours verts (aucun test ne
-couvre ce chemin, dépendant de Modo).
+123 tests pytest toujours verts (aucun test ne couvre ce chemin, dépendant
+de Modo). **Retesté et confirmé par l'auteur le 2026-08-13** (voir la note
+consolidée à la fin du Round 42).
 
-#### Round 39, `color.A` extrait + forme XML revue en groupes indépendants par composante + type d'interpolation par clé — PAS ENCORE TESTÉ DANS MODO (2026-08-11)
+#### Round 39, `color.A` extrait + forme XML revue en groupes indépendants par composante + type d'interpolation par clé — CONFIRMÉ DANS MODO (2026-08-11, retest confirmé 2026-08-13)
 
 Deux demandes de l'auteur juste après le Round 38 :
 
@@ -2546,7 +2820,7 @@ chaque `<Key>`. 123 tests pytest toujours verts. **Rien de tout ça n'est
 testé dans Modo** - même priorité que le Round 38 pour la prochaine
 session (re-exporter et lire le XML résultant).
 
-#### Round 40, `slopeType` écrit en toutes lettres dans le XML + `weighted` traité comme booléen — PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+#### Round 40, `slopeType` écrit en toutes lettres dans le XML + `weighted` traité comme booléen — CONFIRMÉ DANS MODO (2026-08-12, retest confirmé 2026-08-13)
 
 Demande de l'auteur : écrire `slopeType` sous forme de chaîne
 (`slopeType="DIRECT"`, pas l'entier brut) dans le XML, et vérifier si
@@ -2586,9 +2860,9 @@ confirmer).
 `_UTIL_gradient_keys_to_xml_dicts` mis à jour en conséquence. Vérifié hors
 Modo avec des symboles factices (0-7 assignés arbitrairement à
 `iSLOPE_AUTO..iSLOPE_STEPPED`) que la résolution nom↔valeur fonctionne
-correctement. 123 tests pytest toujours verts. **Rien de tout ça n'est
-testé dans Modo** - à confirmer avec un vrai export : `slopeType` doit
-apparaître en toutes lettres (ex. `"DIRECT"`), pas en `"2"`.
+correctement. 123 tests pytest toujours verts. **Retesté et confirmé par
+l'auteur le 2026-08-13** : `slopeType` apparaît bien en toutes lettres
+dans le XML (voir la note consolidée à la fin du Round 42).
 
 #### Round 41, nouvel outil `explore_tools/dump_modo_api.py` + confirmations sur les gradients (2026-08-12)
 
@@ -2650,7 +2924,7 @@ et des confirmations. `explore_tools/dump_modo_api.py` reste disponible
 pour toute future question sur l'API Modo (constantes, signatures) sans
 repasser par un script de diagnostic dédié à chaque fois.
 
-#### Round 42, `_UTIL_get_gradient_keys` réécrite pour utiliser `modo.Channel.envelope` au lieu de `lx.object` à la main — corrige un vrai bug de action layer, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
+#### Round 42, `_UTIL_get_gradient_keys` réécrite pour utiliser `modo.Channel.envelope` au lieu de `lx.object` à la main — corrige un vrai bug de action layer, CONFIRMÉ DANS MODO (2026-08-12, retest confirmé 2026-08-13)
 
 Suite directe du Round 41 : au-delà des dumps `inspect`-based, l'auteur
 signale que le vrai code source du package `modo` est lisible directement
@@ -2698,12 +2972,18 @@ de changer. Le repli `_UTIL_sample_gradient` (Round 37,
 si `modo.Channel(...).envelope` lève malgré tout.
 
 123 tests pytest toujours verts (aucun test ne couvre ce chemin,
-dépendant de Modo). **Pas encore testé dans Modo** - à vérifier avec un
-vrai export que `value`/`color` donnent toujours les mêmes clés
-qu'avant (le fichier de test actuel ne semble pas être dans l'état de
-"flux" que corrige le changement de action layer, donc aucune différence
-de résultat attendue pour lui - le vrai bénéfice est la robustesse pour
-d'autres scènes/scénarios).
+dépendant de Modo).
+
+**Rounds 37-42 retestés et confirmés par l'auteur le 2026-08-13** ("the
+xml is conform to what expected") : l'étage 1 (extraction XML) des couches
+Gradient produit bien de vraies clés `<Key pos=".." value=".."
+slopeType=".."/>` par composante (`value` et `red`/`green`/`blue`/`alpha`
+sous `<color>`), avec `slopeType` en toutes lettres et `minPos`/`maxPos`
+posés correctement, et le `txtrLocator` du Gradient apparaît dans le XML -
+conforme à ce qui était attendu depuis le Round 37. Clôt la dernière
+priorité de test ouverte en tête de fichier sur ce sujet. L'étage 3
+(traduction USD/mtlx) reste abandonné depuis le Round 54 - aucune couche
+Gradient ne produit de nœuds côté USD, uniquement ce XML normalisé fidèle.
 
 #### Round 43, étage 3 (USD/mtlx) pour les couches Gradient — premier cas concret `incidenceAngle`, IMPLÉMENTÉ, PAS ENCORE TESTÉ DANS MODO (2026-08-12)
 
@@ -3517,6 +3797,176 @@ commentaires ci-dessus - une réécriture systématique de style n'a pas été
 demandée et aurait été un diff large à faible valeur ajoutée par rapport
 au risque d'en altérer le sens par erreur.
 
+#### Round 56, `displace` + `vectorDisplace` combinés sur le même matériau (au lieu du dernier qui écrase le premier) — CONFIRMÉ DANS HOUDINI (2026-08-13)
+
+Retest du Round 36 par l'auteur : `displace` seul fonctionne, `vectorDisplace`
+seul fonctionne, mais **les deux combinés sur le même matériau** produisent un
+résultat faux - un seul des deux effets semble avoir de l'effet, alors que les
+deux couches existent bien côté Modo.
+
+Cause : les branches `"displace"` et `"vectorDisplace"` de
+`_USD_connect_texture_output_to_shader_input` appellent chacune,
+indépendamment :
+
+```python
+material.CreateOutput("mtlx:displacement", Sdf.ValueTypeNames.Token).ConnectToSource(output)
+```
+
+`material.outputs:mtlx:displacement` est un unique attribut sur le prim
+matériau - `CreateOutput` avec le même nom retourne le même attribut, donc le
+second effet traité dans la boucle (`_USD_connect_effect_stack`, l'ordre
+d'itération d'`OrderedDict`) reconnecte silencieusement cet attribut,
+écrasant la connexion faite par le premier. Aucun crash, aucun diagnostic -
+un des deux nœuds `ND_displacement_*` reste construit dans le graphe mais
+n'est plus jamais réellement branché sur la sortie du matériau.
+
+Vérifié contre le vrai stdlib MaterialX standalone (`.venv`) : aucun
+`add_displacementshader` n'existe. Le seul combinateur pour deux sorties de
+type `displacementshader` est `ND_mix_displacementshader(fg, bg, mix) ->
+displacementshader` - un blend, pas une somme. L'auteur confirme que
+`mix=0.5` est une approximation raisonnable de ce que fait Modo dans ce cas
+("more like a normalized add operation") - accepté comme solution
+intérimaire plutôt que de deviner/reproduire l'addition vectorielle réelle
+de Modo (qui demanderait de convertir la hauteur scalaire de `displace` en
+vecteur via la normale avant de sommer avec `vectorDisplace`, non vérifié).
+
+Implémenté (`ShaderTree.py`) :
+- Nouveau `ShadingContext.displacementOutputs` (dict, `effectName ->
+  UsdShade.Output` de type `displacementshader`) - reset à chaque mask,
+  aux côtés de `effectsStack`/`previewOutputs`.
+- Les branches `"displace"`/`"vectorDisplace"` ne connectent plus
+  `material.outputs:mtlx:displacement` elles-mêmes - elles stockent
+  seulement leur sortie dans `context.displacementOutputs[effectName]`.
+- Nouvelle fonction `_USD_connect_displacement_outputs(stage, context)`,
+  appelée une fois après la boucle complète sur `context.effectsStack` dans
+  `_USD_connect_effect_stack` (donc après que `displace` et
+  `vectorDisplace` aient tous les deux eu l'occasion de s'enregistrer) :
+  si un seul effet de déplacement est présent, connecte directement sa
+  sortie (comportement identique à avant pour ce cas, déjà confirmé
+  fonctionner côté `displace` comme côté `vectorDisplace` séparément) ; si
+  les deux sont présents, les combine via un nœud `ND_mix_displacementshader`
+  (`mix=0.5`) avant de connecter sa sortie unique.
+
+**Vérifié structurellement contre `usd-core`** : reconstruit le graphe à
+deux sorties de déplacement - confirmé que `material.outputs:mtlx:displacement`
+pointe vers le nœud `Displacement_mix`, dont `fg`/`bg` pointent chacun vers
+un des deux nœuds `ND_displacement_*` d'origine (tous les deux restent
+construits et réellement consommés, contrairement à avant). Le cas à un
+seul effet de déplacement (le seul déjà confirmé en rendu réel jusqu'ici)
+n'est pas affecté structurellement - `combined = outputs[0]` sans passer
+par le nœud de mix, connexion identique à avant. 123 tests pytest toujours
+verts.
+
+**Confirmé par l'auteur dans Houdini** : les deux effets de déplacement,
+combinés sur un même matériau, sont maintenant tous les deux visibles dans
+le rendu ("this works perfectly") - clôt le point ouvert du Round 36 sur
+la combinaison `displace`/`vectorDisplace`.
+
+#### Round 57, `alpha="only"` (stencil sur alpha PNG) cassé par un bug de remap qui écrasait le canal alpha à une constante — CONFIRMÉ DANS HOUDINI (2026-08-13)
+
+Suite du Round 28 : l'auteur teste un stencil avec image N&B (pas de mode
+alpha spécifique) - fonctionne parfaitement. Le même stencil avec un PNG à
+alpha et `alpha="only"` spécifié - **ne fonctionne pas** (comparaison
+rendu Modo vs Karma fournie par l'auteur).
+
+Cause trouvée en traçant le type `Color4f` à travers
+`_USD_create_texture_adjust_nodegraph` (`ShaderTree.py`) : quand
+`alphaMode == "only"` (ou `swizzling`), la texture est lue en `Color4f`
+(`readType`, Round 33) et passe par la chaîne remap/contrast/brightness
+**avant** l'extraction du canal (`ND_separate4_color4`). `_UTIL_float_to_out_type`
+complétait systématiquement le 4ᵉ composant (alpha) à `1.0`, y compris pour
+`outLow` du nœud `ND_remap_color4` :
+
+```python
+elif outType == Sdf.ValueTypeNames.Color4f:
+    return f"({value}, {value}, {value}, 1.0)"
+```
+
+`outLow`/`outHigh` du remap avaient donc tous les deux leur composant alpha
+à `1.0`. Vérifié contre le vrai nodedef standalone (`.venv`) :
+`ND_remap_color4` a pour défauts réels `outlow=(0,0,0,0)`/`outhigh=(1,1,1,1)`
+- une identité sur les 4 canaux. Avec `outlow_alpha == outhigh_alpha == 1.0`,
+la sortie du remap pour le canal alpha devient **constante à 1.0**, quelle
+que soit la valeur d'entrée - le vrai alpha du PNG est donc entièrement
+écrasé avant même d'atteindre `ND_separate4_color4`. `alpha="only"`
+extrayait donc toujours `1.0` (opaque uniforme), jamais le vrai alpha par
+pixel - cohérent avec le symptôme observé (le stencil n'a plus aucun
+découpage, comme si l'effet n'existait pas).
+
+`brightness`/`contrast` (les deux autres consommateurs de
+`_UTIL_float_to_out_type` en `Color4f`) n'ont pas ce problème - vérifié
+contre `ND_multiply_color4`/`ND_contrast_color4` : leurs défauts réels ont
+aussi `1.0` en 4ᵉ composant (`in2`/`amount`), donc le comportement actuel y
+est correct (no-op sur alpha), pas une coïncidence à corriger.
+
+Corrigé : `_UTIL_float_to_out_type` prend maintenant un paramètre
+`alpha` (défaut `1.0`, inchangé pour `brightness`/`contrast`/`outHigh`) ;
+le seul appel pour `outLow` (`ShaderTree.py`, `_USD_create_texture_adjust_nodegraph`)
+passe maintenant `alpha=0.0` - reproduit exactement le défaut réel
+`ND_remap_color4.outlow=(0,0,0,0)`, donc le canal alpha traverse le remap
+inchangé (identité), quelles que soient les valeurs `min`/`max` réglées par
+l'utilisateur pour RGB.
+
+**Vérifié** : `eval(_UTIL_float_to_out_type(0.0, Color4f, alpha=0.0))` →
+`(0.0, 0.0, 0.0, 0.0)`, `eval(_UTIL_float_to_out_type(1.0, Color4f))` →
+`(1.0, 1.0, 1.0, 1.0)` - correspond exactement aux défauts réels de
+`ND_remap_color4`. 123 tests pytest toujours verts (aucun ne couvre ce
+chemin, dépendant de Modo/`fnpxr`).
+
+**Confirmé par l'auteur dans Houdini** : le stencil piloté par l'alpha d'un
+PNG (`alpha="only"`) découpe maintenant correctement, avec la vraie forme
+de l'alpha ("Works perfectly"). Le même bug affectait aussi `swizzling`
+avec `rgba="alpha"` (pas testé séparément par l'auteur ce round, mais
+partage la même cause - probablement corrigé aussi, à confirmer si un cas
+réel l'exerce).
+
+#### Round 58, stencil : `invert`/`round`/`convert` regroupés dans un `NodeGraph` "_stencil" — CONFIRMÉ DANS HOUDINI (2026-08-13)
+
+Demande de l'auteur, une fois le Round 57 confirmé : les trois nœuds mtlx de
+la branche stencil (`invert`/`round`/`convert`) encombrent le graphe en
+prims frères sous le matériau - les regrouper dans un `NodeGraph` nommé
+`<nom_de_la_couche>_stencil`, même logique de rangement que `UV_Transform`
+(Round 12) et `_adjust` (déjà en place pour le post-traitement de texture).
+
+Implémenté (`ShaderTree.py`, branche `stencil` de
+`_USD_connect_texture_output_to_shader_input`) : nouveau prim `NodeGraph`
+`<name>_stencil`, avec une interface input `"in"` (Float) connectée à
+`output` (la valeur accumulée en entrée de la branche stencil) ; les trois
+nœuds internes (`invert`/`round`/`convert`, renommés depuis leurs anciens
+noms de prims frères `_invert_color`/`_set_0_or_1`/`_opacity_color`)
+lisent `nodeGraph.GetInput("in")` au lieu de `output` directement ; la
+sortie du dernier nœud (`convert`, `Color3f`) est exposée comme
+`nodeGraph.outputs:out`, et c'est cette sortie du `NodeGraph` que le
+câblage générique juste après (inchangé) connecte à
+`shader.inputs:opacity` - direction `NodeGraph`-sortie vers `Shader`-entrée,
+le patron déjà éprouvé partout ailleurs dans ce fichier (`UV_Transform`,
+`_adjust`).
+
+**Vérifié structurellement contre `usd-core`** : les trois nœuds
+apparaissent bien imbriqués sous le `NodeGraph`, `invert.inputs:in` pointe
+vers l'interface input `"in"` du `NodeGraph` (pas directement vers la
+source externe), et `standard_surface.inputs:opacity` pointe vers
+`<name>_stencil.outputs:out`. 123 tests pytest toujours verts.
+
+**Point de vigilance, pas vérifié** : l'interface input `"in"` du
+`NodeGraph` est elle-même alimentée par `output` (la valeur accumulée
+avant la branche stencil) - dans le cas courant (un opérateur de blend a
+été construit, `_USD_connect_operator`), c'est la sortie d'un `Shader`
+ordinaire, direction déjà sûre. Mais si aucune valeur de fallback n'existe
+pour cet effet (`input is None`, retour anticipé du Round 30),
+`output` peut être directement la sortie d'un **autre** `NodeGraph`
+(`_adjust`, Round 33) - exactement la configuration qui a cassé
+silencieusement dans Houdini aux Rounds 48/49 (deux `NodeGraph` de haut
+niveau qui se référencent l'un l'autre), même si structurellement valide
+contre `usd-core` à chaque fois. À surveiller si la connexion `"in"` du
+`NodeGraph` "_stencil" semble absente dans l'éditeur de graphe de matériau
+de Houdini malgré sa présence dans le `.usda`.
+
+**Confirmé par l'auteur dans Houdini** : le stencil rend toujours
+correctement après ce regroupement ("Perfect") - y compris le point de
+vigilance ci-dessus (interface input `"in"` du `NodeGraph` "_stencil"),
+qui ne s'est pas matérialisé en pratique pour ce cas de test.
+
 ### Limites connues, acceptées (pas d'équivalent natif dans le catalogue de preview de Storm)
 
 - **Projection triplanaire** : aucun nœud natif équivalent à
@@ -3658,15 +4108,18 @@ l'effort d'un sérialiseur `.mtlx` maison vaut le besoin réel à ce moment-là"
 
 ## Prochaines étapes possibles
 
-0. **PRIORITAIRE** : voir le paragraphe "PRIORITAIRE pour la prochaine
-   session (2026-08-12)" en tête de fichier - re-exporter
-   "PF_ShaderBall_base" et confirmer les Rounds 28-36 (rien retesté en
-   conditions réelles depuis le Round 28), en particulier `vectorDisplace`
-   (Round 36). Les couches `Gradient` (Rounds 37-42) restent confirmées à
-   l'étage 1 (XML) seulement - voir item 7 ci-dessous pour l'étage 3,
-   abandonné au Round 54.
+0. ~~**PRIORITAIRE** : isoler la dernière branche encore ouverte du
+   Round 59~~ — **CLOS le 2026-08-13** : deux bugs réels corrigés
+   (`_MAX_DERIVED_IOR`, `_MIN_IOR`). `useRefIdx=1`/`specRefIdx=1` garde un
+   écart de forme de courbe (pas une valeur invalide) que l'auteur a
+   choisi d'accepter comme limite connue plutôt que de poursuivre la
+   calibration - documenté dans le README. Les Rounds 28-42 sont tous
+   confirmés depuis le retest du 2026-08-13 ; les couches `Gradient`
+   restent confirmées à l'étage 1 (XML) seulement - voir item 7
+   ci-dessous pour l'étage 3, abandonné au Round 54.
 
-Le reste, aucune urgence, à discuter avec l'auteur :
+Plus de priorité ouverte à ce stade. Le reste, aucune urgence, à discuter
+avec l'auteur :
 
 1. Trancher la décision n°2 (duplication des tables entre `ShaderFilters/`
    et `normalize/`) si elle devient gênante. Décider aussi du sort de

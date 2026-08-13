@@ -7,8 +7,9 @@ This plugin is intended to export your shader tree as a whole into a USD file th
 It's in beta actually, but works quite well on my side (almost for 80% of my needs) :  
 • Basic shading is supported (gtr and principled BRDFs)  
 • Basic texture layers compositing is supported (blend modes, opacity stacking)  
-• Bump, normal, and displacement maps are supported, including vector displacement  
-• Stencil (opacity cutout) layers are supported  
+• Bump, normal, and displacement maps are supported, including vector displacement — height-based and vector displacement can be combined on the same material (their displacement is blended, not simply overwritten)  
+• Stencil (opacity cutout) layers are supported, including PNG alpha channel-driven stencils  
+• Specular intensity and index of refraction (IOR) are derived from Modo's specular controls and validated against the physically valid range before being handed to MaterialX — every specular/IOR configuration has been checked against Modo's own render and matches closely, **except** Principled materials with both "Use Refractive Index" and "Compute from Specular Amount" enabled together, which can still render with a visibly different specular intensity curve than Modo (Karma's response has a wider dynamic range than Modo's own — under investigation, not currently fixed; every other specular/IOR combination, including plain Principled and GTR/PBR, matches well)  
 • Texture UV transforms are fully supported: tiling, offset, rotation (around the tile center, matching Modo)
 • Per-layer UV map selection for meshes with more than one UV set.
 • Wrap modes (repeat/clamp/mirror/reset) are correctly generated on the MaterialX side, but "mirror" and "reset" are not currently honored by Houdini/Karma's own MaterialX implementation — a Houdini-side limitation, not something this kit can work around; "repeat"/"clamp" work correctly  
