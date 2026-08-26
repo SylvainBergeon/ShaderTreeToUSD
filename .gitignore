@@ -1,5 +1,7 @@
 .qodo
 .vscode
+.claude
+CLAUDE.md
 .DS_Store
 Scripts/pxr-stubs
 __pycache__/
